@@ -6,7 +6,8 @@ from sqlalchemy.orm import Session
 import plotly.express as px
 import plotly.graph_objects as go
 
-from modules.db import engine, Position, CashFlow, Transaction, PortfolioSnapshot, WatchlistItem
+from modules.db import engine, Position, CashFlow, Transaction, PortfolioSnapshot, WatchlistItem, LedgerEntry
+from modules.ledger import LedgerManager
 from modules.quant_engine import fetch_quant_data, calculate_scores
 from modules.valuation import calculate_fair_value
 from portfolio_config import MAX_STOCK_WEIGHT, MAX_ETF_WEIGHT, MIN_CASH_TARGET
@@ -70,7 +71,9 @@ df_snap = load_snapshots()
 df_watch = load_watchlist()
 
 # --- CÁLCULO DE LIQUIDEZ Y VALORACIÓN BÁSICA ---
-total_cash = df_cash['amount'].sum() if not df_cash.empty else 0.0
+with Session(engine) as session:
+    lm = LedgerManager(session)
+    total_cash = lm.get_cash_balance()
 total_cost_basis = (df_pos['quantity'] * df_pos['average_cost']).sum() if not df_pos.empty else 0.0
 
 total_market_value = 0.0
@@ -427,9 +430,13 @@ with tab_tx:
                     st.rerun()
                 nueva_tx = Transaction(date=op_date, ticker=op_ticker, action=op_action, quantity=op_qty, price=op_price, reason=op_reason)
                 session.add(nueva_tx)
+                # Registrar en Ledger
+                lm = LedgerManager(session)
+                
                 if instrumento == "Acción":
                     pos = session.query(Position).filter_by(ticker=op_ticker).first()
                     if op_action == "BUY":
+                        lm.record_buy(op_date, op_ticker, op_qty, op_price, memo=op_reason)
                         if pos:
                             total_cost_prev = pos.quantity * pos.average_cost
                             new_total_cost = total_cost_prev + (op_qty * op_price)
@@ -444,10 +451,22 @@ with tab_tx:
                         if op_qty > pos.quantity:
                             st.session_state["op_err"] = f"Solo posees {pos.quantity:.4f} unidades."
                             st.rerun()
+                            
+                        lm.record_sell(op_date, op_ticker, op_qty, op_price, pos.average_cost, memo=op_reason)
+                        
                         pos.quantity -= op_qty
                         if pos.quantity <= 0:
                             session.delete(pos)
                 elif instrumento == "Efectivo":
+                    if op_action == "WITHDRAW":
+                        lm.record_withdrawal(op_date, op_price, memo=op_reason)
+                    elif op_action == "DEPOSIT":
+                        lm.record_deposit(op_date, op_price, memo=op_reason)
+                    elif op_action == "DIVIDEND":
+                        import uuid
+                        tx_id = str(uuid.uuid4())
+                        lm._create_entry(op_date, tx_id, "ASSET:CASH", "INCOME:DIVIDEND", op_price, memo=op_reason)
+                        
                     multiplier = -1 if op_action == "WITHDRAW" else 1
                     session.add(CashFlow(date=op_date, amount=op_price * multiplier, type=op_action))
                 session.commit()

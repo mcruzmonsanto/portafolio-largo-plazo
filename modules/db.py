@@ -54,6 +54,17 @@ class CashFlow(Base):
     amount = Column(Float, nullable=False)
     type = Column(String, nullable=False)
 
+class LedgerEntry(Base):
+    __tablename__ = 'ledger_entries'
+    id = Column(Integer, Identity(start=1, increment=1), primary_key=True)
+    date = Column(Date, nullable=False)
+    transaction_id = Column(String, nullable=False)
+    debit_account = Column(String, nullable=False)
+    credit_account = Column(String, nullable=False)
+    amount = Column(Float, nullable=False)
+    ticker = Column(String, nullable=True)
+    memo = Column(String, nullable=True)
+
 class PortfolioSnapshot(Base):
     __tablename__ = 'portfolio_history'
     id = Column(Integer, Identity(start=1, increment=1), primary_key=True)

@@ -2,6 +2,8 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import concurrent.futures
+from modules.data_ingestion import DataProvider
+import warnings
 
 def fetch_quant_data(tickers):
     """
@@ -29,27 +31,22 @@ def fetch_quant_data(tickers):
     else:
         spy_returns = pd.Series(dtype=float)
 
+    # Instanciar DataProvider (maneja Polygon, AlphaVantage, yf y caché)
+    provider = DataProvider()
+    
     # Descarga rápida de fundamentales (Market Cap, Target Price)
     fundamentals = {}
     def get_info(t):
         try:
-            info = yf.Ticker(t).info
-            growth = info.get('revenueGrowth')
-            if growth is None:
-                growth = info.get('earningsGrowth')
-            if growth is None:
-                growth = 0.05
-            
-            return t, info.get('marketCap'), info.get('targetMeanPrice'), info.get('trailingEps'), \
-                   growth, \
-                   info.get('returnOnEquity'), info.get('operatingMargins') or info.get('profitMargins'), \
-                   info.get('debtToEquity')
-        except:
+            quote = provider.get_quote(t)
+            return t, quote.market_cap, quote.target_price, quote.eps, \
+                   quote.growth, quote.roe, quote.op_margin, quote.debt_equity
+        except Exception as e:
             return t, None, None, None, 0.05, None, None, None
             
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
         for t, mcap, tgt, eps, growth, roe, op_margin, debt_eq in executor.map(get_info, tickers):
-            growth_clamped = max(-0.10, min(growth, 0.30))
+            growth_clamped = max(-0.10, min(growth, 0.30)) if growth is not None else 0.05
             fundamentals[t] = {
                 'market_cap': mcap, 'target_price': tgt, 'eps': eps, 
                 'growth': growth_clamped, 'roe': roe, 'op_margin': op_margin, 

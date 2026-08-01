@@ -55,8 +55,8 @@ with st.sidebar:
     st.info(f"🔹 Máx. por Acción: {MAX_STOCK_WEIGHT*100}%\n\n🔹 Máx. Total ETFs: {MAX_ETF_WEIGHT*100}%\n\n🔹 Efectivo Mínimo: {dynamic_min_cash*100}%")
     
     st.markdown("---")
-    st.subheader("🌐 Régimen Macro")
-    color = "🟢" if "Bull" in regime_data['regime'] else ("🟡" if "Correction" in regime_data['regime'] else "🔴")
+    st.subheader("🤖 Régimen ML (GMM)")
+    color = "🟢" if "Bull" in regime_data['regime'] or "Recovery" in regime_data['regime'] else ("🔴" if "Bear" in regime_data['regime'] or "Panic" in regime_data['regime'] else "🟡")
     st.markdown(f"**Estado:** {color} {regime_data['regime']}")
     st.markdown(f"**SPY:** ${regime_data['spy_price']:.2f} (SMA200: ${regime_data['spy_sma200']:.2f})")
     st.markdown(f"**VIX:** {regime_data['vix']:.2f}")

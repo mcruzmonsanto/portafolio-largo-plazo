@@ -14,16 +14,16 @@ def seed_data():
         
         # 2. Insertar Posiciones Abiertas Exactas
         posiciones = [
-            Position(ticker="AMZN", quantity=1.0, average_cost=234.21),
-            Position(ticker="AVGO", quantity=1.0, average_cost=385.69),
-            Position(ticker="GOOGL", quantity=1.0, average_cost=332.72),
-            Position(ticker="META", quantity=2.0, average_cost=591.58),
-            Position(ticker="MSFT", quantity=1.0, average_cost=402.74),
-            Position(ticker="NVDA", quantity=2.0, average_cost=204.67),
-            Position(ticker="PLTR", quantity=1.0, average_cost=116.25),
-            Position(ticker="QQQM", quantity=3.0, average_cost=294.50),
-            Position(ticker="SMH", quantity=2.0, average_cost=594.39),
-            Position(ticker="SPMO", quantity=4.0, average_cost=150.46)
+            Position(ticker="AMZN", quantity=1.0, average_cost=234.21, fair_value_graham=210.0, fair_value_multiple=250.0, conviction_score=5),
+            Position(ticker="AVGO", quantity=1.0, average_cost=385.69, fair_value_graham=350.0, fair_value_multiple=400.0, conviction_score=5),
+            Position(ticker="GOOGL", quantity=1.0, average_cost=332.72, fair_value_graham=310.0, fair_value_multiple=350.0, conviction_score=4),
+            Position(ticker="META", quantity=2.0, average_cost=591.58, fair_value_graham=550.0, fair_value_multiple=620.0, conviction_score=5),
+            Position(ticker="MSFT", quantity=1.0, average_cost=402.74, fair_value_graham=380.0, fair_value_multiple=430.0, conviction_score=5),
+            Position(ticker="NVDA", quantity=2.0, average_cost=204.67, fair_value_graham=180.0, fair_value_multiple=220.0, conviction_score=5),
+            Position(ticker="PLTR", quantity=1.0, average_cost=116.25, fair_value_graham=95.0, fair_value_multiple=125.0, conviction_score=4),
+            Position(ticker="QQQM", quantity=3.0, average_cost=294.50, fair_value_graham=280.0, fair_value_multiple=310.0, conviction_score=4),
+            Position(ticker="SMH", quantity=2.0, average_cost=594.39, fair_value_graham=550.0, fair_value_multiple=620.0, conviction_score=4),
+            Position(ticker="SPMO", quantity=4.0, average_cost=150.46, fair_value_graham=140.0, fair_value_multiple=165.0, conviction_score=4)
         ]
         session.add_all(posiciones)
         

@@ -77,47 +77,82 @@ with tab_dash:
 # --- PESTAÑA 2: POSICIONES E INVENTARIO ---
 with tab_pos:
     st.subheader("📊 Inventario y Margen de Seguridad")
-    st.markdown("Auditoría de posiciones bajo los criterios de Benjamin Graham y Múltiplos.")
+    st.markdown("Auditoría de posiciones bajo los criterios de Benjamin Graham y Múltiplos Históricos.")
 
     df_pos = load_positions()
     
     if not df_pos.empty:
-        # 1. Simulación de cálculo analítico de Valor Razonable (Framework Graham & Múltiplos)
-        # Nota: En futuras iteraciones esto se conectará a inputs editables o APIs de fundamentales.
-        # Aquí aplicamos los valores base de tu tesis de largo plazo.
-        
-        # Diccionario de ejemplo con estimaciones conservadoras de Fair Value por Ticker
-        graham_values = {"AMZN": 210.0, "AVGO": 350.0, "GOOGL": 310.0, "META": 550.0, "MSFT": 380.0, 
-                         "NVDA": 180.0, "PLTR": 95.0, "QQQM": 280.0, "SMH": 550.0, "SPMO": 140.0}
-        
-        multiple_values = {"AMZN": 250.0, "AVGO": 400.0, "GOOGL": 350.0, "META": 620.0, "MSFT": 430.0, 
-                           "NVDA": 220.0, "PLTR": 125.0, "QQQM": 310.0, "SMH": 620.0, "SPMO": 165.0}
+        # Asegurar columnas analíticas si vienen vacías de la BD
+        for col in ['fair_value_graham', 'fair_value_multiple', 'conviction_score']:
+            if col not in df_pos.columns:
+                df_pos[col] = 0.0
 
-        df_pos['Fair_Value_Graham'] = df_pos['ticker'].map(graham_values).fillna(df_pos['average_cost'])
-        df_pos['Fair_Value_Multiple'] = df_pos['ticker'].map(multiple_values).fillna(df_pos['average_cost'])
+        # Cálculos analíticos de valor razonable y margen de seguridad
+        # F.V. Consenso = Promedio entre Graham y Múltiplos
+        df_pos['Fair_Value_Consenso'] = (df_pos['fair_value_graham'] + df_pos['fair_value_multiple']) / 2
         
-        # Promedio del Valor Razonable Teórico
-        df_pos['Fair_Value_Promedio'] = (df_pos['Fair_Value_Graham'] + df_pos['Fair_Value_Multiple']) / 2
-        
-        # Margen de Seguridad (Asumiendo costo promedio como proxy temporal de precio actual si no hay cotización live)
-        # Margen = (Fair Value - Costo Promedio) / Fair Value * 100
-        df_pos['Margen_Seguridad_%'] = ((df_pos['Fair_Value_Promedio'] - df_pos['average_cost']) / df_pos['Fair_Value_Promedio']) * 100
+        # Margen de Seguridad % = (Fair Value Consenso - Costo Promedio) / Fair Value Consenso * 100
+        # (Si Fair Value es 0 o nulo, evitamos división por cero)
+        df_pos['Margen_Seguridad_%'] = df_pos.apply(
+            lambda row: ((row['Fair_Value_Consenso'] - row['average_cost']) / row['Fair_Value_Consenso'] * 100) 
+            if row['Fair_Value_Consenso'] > 0 else 0.0, axis=1
+        )
 
-        # Mostrar tabla enriquecida
+        # Visualización en tabla estructurada
+        st.markdown("### 📋 Resumen de Cartera y Descuento Teórico")
         st.dataframe(
-            df_pos[['ticker', 'quantity', 'average_cost', 'Fair_Value_Graham', 'Fair_Value_Multiple', 'Fair_Value_Promedio', 'Margen_Seguridad_%']],
+            df_pos[['ticker', 'quantity', 'average_cost', 'fair_value_graham', 'fair_value_multiple', 'Fair_Value_Consenso', 'Margen_Seguridad_%', 'conviction_score']],
             use_container_width=True,
             hide_index=True,
             column_config={
                 "average_cost": st.column_config.NumberColumn("Costo Promedio", format="$%.2f"),
-                "Fair_Value_Graham": st.column_config.NumberColumn("F.V. Graham", format="$%.2f"),
-                "Fair_Value_Multiple": st.column_config.NumberColumn("F.V. Múltiplos", format="$%.2f"),
-                "Fair_Value_Promedio": st.column_config.NumberColumn("F.V. Consenso", format="$%.2f"),
-                "Margen_Seguridad_%": st.column_config.NumberColumn("Margen de Seguridad", format="%.2f%%")
+                "fair_value_graham": st.column_config.NumberColumn("F.V. Graham", format="$%.2f"),
+                "fair_value_multiple": st.column_config.NumberColumn("F.V. Múltiplos", format="$%.2f"),
+                "Fair_Value_Consenso": st.column_config.NumberColumn("F.V. Consenso", format="$%.2f"),
+                "Margen_Seguridad_%": st.column_config.NumberColumn("Margen de Seguridad", format="%.2f%%"),
+                "conviction_score": st.column_config.NumberColumn("Convicción (1-5)", format="%d")
             }
         )
+
+        # Panel de Edición de Tesis y Valoración por Ticker
+        st.divider()
+        st.subheader("🛠️ Actualizar Supuestos de Valoración (Tesis)")
         
-        st.info("💡 **Criterio de Inversión:** Un Margen de Seguridad positivo indica que el precio de adquisición se encuentra por debajo del valor intrínseco estimado bajo los filtros conservadores de Graham.")
+        with st.form("update_valuation_form"):
+            col_t, col_g, col_m, col_c = st.columns(4)
+            with col_t:
+                selected_ticker = st.selectbox("Seleccionar Ticker", df_pos['ticker'].tolist())
+            
+            # Obtener valores actuales de la fila seleccionada
+            current_row = df_pos[df_pos['ticker'] == selected_ticker].iloc[0]
+            
+            with col_g:
+                new_graham = st.number_input("F.V. Graham (USD)", min_value=0.0, value=float(current_row['fair_value_graham'] or 0.0), step=1.0, format="%.2f")
+            with col_m:
+                new_multiple = st.number_input("F.V. Múltiplos (USD)", min_value=0.0, value=float(current_row['fair_value_multiple'] or 0.0), step=1.0, format="%.2f")
+            with col_c:
+                new_conviction = st.slider("Convicción de Tesis", min_value=1, max_value=5, value=int(current_row['conviction_score'] or 3))
+                
+            submit_valuation = st.form_submit_button("Actualizar Supuestos en Base de Datos")
+            
+        if submit_valuation:
+            try:
+                from sqlalchemy.orm import Session
+                from modules.db import engine, Position
+                
+                with Session(engine) as session:
+                    pos_to_update = session.query(Position).filter_by(ticker=selected_ticker).first()
+                    if pos_to_update:
+                        pos_to_update.fair_value_graham = new_graham
+                        pos_to_update.fair_value_multiple = new_multiple
+                        pos_to_update.conviction_score = new_conviction
+                        session.commit()
+                        st.success(f"[OK] Supuestos para **{selected_ticker}** actualizados correctamente.")
+                        st.rerun()
+            except Exception as e:
+                st.error(f"Error al actualizar la base de datos: {e}")
+
+        st.info("💡 **Marco Munger/Graham:** Recuerda que la única justificación para deshacerse de una posición de alta convicción es el deterioro estructural de la tesis de negocio, nunca la volatilidad de precios del mercado.")
     else:
         st.warning("No hay posiciones registradas en el inventario.")
 

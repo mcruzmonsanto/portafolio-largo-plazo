@@ -293,7 +293,7 @@ with tab_watch:
                             return "Posición al tope (Regla Riesgo)"
                             
                         # Efectivo disponible por encima del target mínimo
-                        available_cash = total_cash - (portfolio_net_worth * MIN_CASH_TARGET)
+                        available_cash = total_cash - (portfolio_net_worth * dynamic_min_cash)
                         if available_cash <= 0:
                             return "No hay efectivo libre"
                             

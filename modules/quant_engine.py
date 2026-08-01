@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import concurrent.futures
 from modules.data_ingestion import DataProvider
+from modules.scoring_engine import CompositeScorer
 import warnings
 
 def fetch_quant_data(tickers):
@@ -119,96 +120,14 @@ def fetch_quant_data(tickers):
         except Exception as e:
             print(f"Error procesando {ticker}: {e}")
             
-    return pd.DataFrame(results)
-
-def _score_metric(value, low, high, invert=False, neutral=50):
-    """Escala 'value' linealmente a un score 0-100 entre low y high.
-    invert=True cuando un valor MAYOR es PEOR (ej. deuda)."""
-    if value is None:
-        return neutral
-    if invert:
-        value, low, high = -value, -high, -low
-    if value <= low:
-        return 0.0
-    if value >= high:
-        return 100.0
-    return (value - low) / (high - low) * 100.0
-
-def calculate_quality_score(row):
-    """Quality Score real (0-100) basado en ROE, margen operativo y apalancamiento."""
-    roe = row.get('roe')
-    op_margin = row.get('op_margin')
-    debt_eq = row.get('debt_equity') # yfinance lo da como % (ej. 154.3 = D/E de 1.54)
+    df_results = pd.DataFrame(results)
     
-    roe_score = _score_metric(roe, low=0.05, high=0.30)        # ROE 5%->0, 30%+->100
-    margin_score = _score_metric(op_margin, low=0.05, high=0.35) # Margen 5%->0, 35%+->100
-    debt_score = _score_metric(debt_eq, low=0, high=250, invert=True) # D/E 0->100, 250%+->0
-    
-    return round((roe_score * 0.35) + (margin_score * 0.35) + (debt_score * 0.30), 1)
-
-def calculate_scores(row, quality_score_default=85):
-    """
-    Calcula los scores institucionales en base a datos técnicos y fundamentales.
-    Retorna un diccionario con los scores y la señal.
-    """
-    # 1. TrendScore (0-100)
-    trend_score = 0
-    price = row.get('current_price', 0)
-    ma20 = row.get('ma20', np.nan)
-    ma50 = row.get('ma50', np.nan)
-    ma200 = row.get('ma200', np.nan)
-    
-    if pd.notna(ma20) and price > ma20: trend_score += 20
-    if pd.notna(ma50) and price > ma50: trend_score += 30
-    if pd.notna(ma200) and price > ma200: trend_score += 30
-    if pd.notna(ma50) and pd.notna(ma200) and ma50 > ma200: trend_score += 20
-    
-    # 2. RiskScore (0-100) -> Menor es mejor
-    vol = row.get('volatility', 0.25)
-    beta = row.get('beta', 1.0)
-    
-    risk_vol = min(max((vol - 0.10) / 0.40 * 100, 0), 100)
-    risk_beta = min(max((beta - 0.5) / 1.5 * 100, 0), 100)
-    risk_score = (risk_vol * 0.6) + (risk_beta * 0.4)
-    
-    # 3. ValueScore (0-100)
-    mos = row.get('margin_of_safety', 0.0) 
-    if mos > 0.40:
-        value_score = 100
-    elif mos > 0.20:
-        value_score = 80
-    elif mos > 0:
-        value_score = 60
-    elif mos > -0.20:
-        value_score = 40
-    else:
-        value_score = 10
-        
-    # 4. Quality Score
-    quality_score = calculate_quality_score(row)
-    if quality_score is None or quality_score == 50:
-        quality_score = quality_score_default
-    
-    # 5. Conviction Score (Ponderación Maestro)
-    risk_inverted = 100 - risk_score
-    conviction_score = (value_score * 0.35) + (trend_score * 0.25) + (quality_score * 0.20) + (risk_inverted * 0.20)
-    
-    # 6. Señal (compuerta: el valor manda, el momentum solo afina el timing)
-    if mos < 0:
-        signal = "NO COMPRAR" # sin margen de seguridad, sin importar qué tan bueno se vea el momentum
-    elif mos >= 0.30 and trend_score >= 60:
-        signal = "COMPRA FUERTE" # barata Y con tendencia a favor
-    elif mos >= 0.30 and trend_score < 60:
-        signal = "COMPRA" # barata pero tendencia floja, entrar con cautela/escalonado
-    elif mos >= 0.10:
-        signal = "ESPERAR" # algo de descuento pero no suficiente
-    else:
-        signal = "NO COMPRAR"
-        
-    return {
-        'TrendScore': round(trend_score, 1),
-        'RiskScore': round(risk_score, 1),
-        'ValueScore': round(value_score, 1),
-        'ConvictionScore': round(conviction_score, 1),
-        'Signal': signal
-    }
+    # Calcular Z-Scores usando el CompositeScorer
+    if not df_results.empty:
+        scorer = CompositeScorer()
+        df_scores = scorer.score_universe(fundamentals, data)
+        if not df_scores.empty:
+            df_scores['ticker'] = df_scores.index
+            df_results = pd.merge(df_results, df_scores, on='ticker', how='left')
+            
+    return df_results

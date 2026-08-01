@@ -8,7 +8,8 @@ import plotly.graph_objects as go
 
 from modules.db import engine, Position, CashFlow, Transaction, PortfolioSnapshot, WatchlistItem, LedgerEntry
 from modules.ledger import LedgerManager
-from modules.quant_engine import fetch_quant_data, calculate_scores
+from modules.quant_engine import fetch_quant_data
+from modules.signal_engine import BayesianSignal
 from modules.valuation import calculate_fair_value
 from portfolio_config import MAX_STOCK_WEIGHT, MAX_ETF_WEIGHT, MIN_CASH_TARGET
 
@@ -107,7 +108,11 @@ if not df_pos.empty:
             df_enriched['margin_of_safety'] = df_enriched.apply(calc_mos, axis=1)
             
             # Scores
-            scores = df_enriched.apply(lambda r: calculate_scores(r, DEFAULT_QUALITY_SCORE), axis=1)
+            signal_engine = BayesianSignal(payoff_ratio=3.0)
+            def _apply_signal(row):
+                return signal_engine.generate_signal(row.get('composite_z', 0), row.get('margin_of_safety', 0))
+                
+            scores = df_enriched.apply(_apply_signal, axis=1)
             scores_df = pd.DataFrame(list(scores))
             df_enriched = pd.concat([df_enriched, scores_df], axis=1)
             
@@ -177,10 +182,10 @@ with tab_dash:
     with col_chart2:
         st.subheader("Inventario Consolidado")
         if not df_enriched.empty:
-            disp_cols = ['ticker', 'current_price', 'market_value', 'weight', 'unrealized_pl_pct', 'ConvictionScore', 'Signal']
+            disp_cols = ['ticker', 'current_price', 'market_value', 'weight', 'unrealized_pl_pct', 'prob_success', 'Signal']
             
             def color_signal(val):
-                color = 'green' if 'BUY' in str(val) else 'red' if 'REDUCE' in str(val) or 'AVOID' in str(val) else 'gray'
+                color = 'green' if 'COMPRA' in str(val) else 'red' if 'NO COMPRAR' in str(val) else 'gray'
                 return f'color: {color}; font-weight: bold;'
 
             st.dataframe(
@@ -193,7 +198,7 @@ with tab_dash:
                     "market_value": st.column_config.NumberColumn("Valor Mercado", format="$%.2f"),
                     "weight": st.column_config.ProgressColumn("Peso %", format="%.2f", min_value=0, max_value=MAX_STOCK_WEIGHT*1.5),
                     "unrealized_pl_pct": st.column_config.NumberColumn("Retorno %", format="%.2f%%"),
-                    "ConvictionScore": st.column_config.NumberColumn("Score"),
+                    "prob_success": st.column_config.NumberColumn("Prob. Éxito", format="%.2f"),
                     "Signal": "Señal"
                 },
                 height=350
@@ -242,7 +247,9 @@ with tab_watch:
                 df_wq = fetch_quant_data(w_tickers)
                 if not df_wq.empty:
                     df_wq['margin_of_safety'] = df_wq.apply(calc_mos, axis=1)
-                    w_scores = df_wq.apply(lambda r: calculate_scores(r, DEFAULT_QUALITY_SCORE), axis=1)
+                    
+                    signal_engine = BayesianSignal(payoff_ratio=3.0)
+                    w_scores = df_wq.apply(lambda r: signal_engine.generate_signal(r.get('composite_z', 0), r.get('margin_of_safety', 0)), axis=1)
                     w_scores_df = pd.DataFrame(list(w_scores))
                     df_wq = pd.concat([df_wq, w_scores_df], axis=1)
                     
@@ -308,7 +315,7 @@ with tab_watch:
                             return 'background-color: #40320a; color: #f1c40f;'
                         return ''
                         
-                    styled_df = df_wq[['ticker', 'current_price', 'target_price', 'upside_pct', 'time_to_target_months', 'market_cap_billions', 'beta', 'Signal', 'ConvictionScore', 'Action_Plan', 'notes']].style.map(color_watchlist_signal, subset=['Signal', 'Action_Plan'])
+                    styled_df = df_wq[['ticker', 'current_price', 'target_price', 'upside_pct', 'time_to_target_months', 'market_cap_billions', 'beta', 'Signal', 'prob_success', 'kelly_fraction', 'Action_Plan', 'notes']].style.map(color_watchlist_signal, subset=['Signal', 'Action_Plan'])
                     
                     st.dataframe(
                         styled_df,
@@ -320,6 +327,8 @@ with tab_watch:
                             "time_to_target_months": st.column_config.NumberColumn("Tiempo Est. (Meses)", format="%.1f M"),
                             "market_cap_billions": st.column_config.NumberColumn("Market Cap (Billones)", format="$%.2f B"),
                             "beta": st.column_config.NumberColumn("Beta", format="%.2f"),
+                            "prob_success": st.column_config.NumberColumn("Prob. Éxito", format="%.2f"),
+                            "kelly_fraction": st.column_config.NumberColumn("Kelly Target", format="%.2%"),
                             "Action_Plan": "Plan de Acción Sugerido",
                             "notes": "Tesis"
                         }
@@ -330,13 +339,11 @@ with tab_watch:
 with tab_reb:
     st.subheader("⚖️ Rebalanceo de Portafolio Existente")
     if not df_enriched.empty:
-        df_buy = df_enriched[['ticker', 'asset_type', 'ConvictionScore', 'Signal', 'weight', 'market_value']].copy()
+        df_buy = df_enriched[['ticker', 'asset_type', 'prob_success', 'kelly_fraction', 'Signal', 'weight', 'market_value']].copy()
         
         def calc_target(row):
             limit = MAX_ETF_WEIGHT if row['asset_type'] == 'ETF' else MAX_STOCK_WEIGHT
-            # En un algoritmo completo, aquí se distribuiría el peso por convicción.
-            # Por simplicidad, tomamos el mínimo entre el límite de riesgo y un target proporcional simple.
-            base_target = row['ConvictionScore'] / 100.0 * limit
+            base_target = row.get('kelly_fraction', 0)
             return min(base_target, limit)
             
         df_buy['target_weight'] = df_buy.apply(calc_target, axis=1)

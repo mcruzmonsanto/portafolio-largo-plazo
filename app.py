@@ -276,25 +276,18 @@ with tab_watch:
                                 est_months = (upside_decimal / vol) * 12
                                 df_wq.at[idx, 'time_to_target_months'] = est_months
                     
-                    # Formato de Market Cap en Billones (B) / Trillones (T)
-                    def format_mcap(val):
-                        if pd.isna(val): return "-"
-                        if val >= 1e12: return f"${val/1e12:.2f}T"
-                        if val >= 1e9: return f"${val/1e9:.2f}B"
-                        if val >= 1e6: return f"${val/1e6:.2f}M"
-                        return f"${val:,.0f}"
-                        
-                    df_wq['market_cap_str'] = df_wq['market_cap'].apply(format_mcap)
+                    # Convertir Market Cap a Billones (B) para que sea numérico y se pueda ordenar
+                    df_wq['market_cap_billions'] = df_wq['market_cap'] / 1e9
                     
                     st.dataframe(
-                        df_wq[['ticker', 'current_price', 'target_price', 'upside_pct', 'time_to_target_months', 'market_cap_str', 'beta', 'Signal', 'ConvictionScore', 'Action_Plan', 'notes']],
+                        df_wq[['ticker', 'current_price', 'target_price', 'upside_pct', 'time_to_target_months', 'market_cap_billions', 'beta', 'Signal', 'ConvictionScore', 'Action_Plan', 'notes']],
                         use_container_width=True, hide_index=True,
                         column_config={
                             "current_price": st.column_config.NumberColumn("Precio", format="$%.2f"),
                             "target_price": st.column_config.NumberColumn("Precio Obj.", format="$%.2f"),
                             "upside_pct": st.column_config.NumberColumn("Upside", format="%.2f%%"),
                             "time_to_target_months": st.column_config.NumberColumn("Tiempo Est. (Meses)", format="%.1f M"),
-                            "market_cap_str": "Market Cap",
+                            "market_cap_billions": st.column_config.NumberColumn("Market Cap (Billones)", format="$%.2f B"),
                             "beta": st.column_config.NumberColumn("Beta", format="%.2f"),
                             "Action_Plan": "Plan de Acción Sugerido",
                             "notes": "Tesis"

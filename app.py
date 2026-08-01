@@ -232,7 +232,7 @@ with tab_dash:
         if st.button("Generar Portfolio Tear Sheet (PDF)"):
             with st.spinner("Compilando reporte..."):
                 try:
-                    pdf_bytes = generate_tear_sheet(df_enriched, portfolio_net_worth, total_cash, beta_val, regime, dynamic_min_cash)
+                    pdf_bytes = generate_tear_sheet(df_enriched, portfolio_net_worth, total_cash, beta_val, regime_data['regime'], dynamic_min_cash)
                     st.download_button(
                         label="📄 Descargar Documento",
                         data=pdf_bytes,

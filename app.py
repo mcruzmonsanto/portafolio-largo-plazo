@@ -1,3 +1,4 @@
+import logging
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -17,6 +18,14 @@ from modules.reporting import generate_tear_sheet
 from portfolio_config import MAX_STOCK_WEIGHT, MAX_ETF_WEIGHT
 
 st.set_page_config(page_title="Terminal Cuantitativo LP", page_icon="📈", layout="wide", initial_sidebar_state="collapsed")
+
+# --- CONFIGURACIÓN DE MONITOREO (LOGGING) ---
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    handlers=[logging.StreamHandler()]
+)
+logger = logging.getLogger("PortafolioApp")
 
 # --- REGLAS DURAS DEL PORTAFOLIO (INSTITUCIONALES) ---
 DEFAULT_QUALITY_SCORE = 85
@@ -157,8 +166,9 @@ try:
             )
             session.add(snap)
             session.commit()
+            logger.info(f"Snapshot guardado: {today} | NW: ${portfolio_net_worth:.2f}")
 except Exception as e:
-    pass 
+    logger.error(f"Error guardando snapshot diario: {e}")
 
 # --- DASHBOARD DE MÉTRICAS VISUALES ---
 c1, c2, c3, c4 = st.columns(4)

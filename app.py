@@ -11,6 +11,7 @@ from modules.ledger import LedgerManager
 from modules.quant_engine import fetch_quant_data
 from modules.signal_engine import BayesianSignal
 from modules.valuation import calculate_fair_value
+from modules.scanner import AutoScanner, UNIVERSES
 from portfolio_config import MAX_STOCK_WEIGHT, MAX_ETF_WEIGHT, MIN_CASH_TARGET
 
 st.set_page_config(page_title="Terminal Cuantitativo LP", page_icon="📈", layout="wide", initial_sidebar_state="collapsed")
@@ -149,8 +150,8 @@ c4.metric("Riesgo Beta Portafolio", f"{beta_val:.2f}", delta="Mercado = 1.0", de
 
 st.markdown("---")
 
-tab_dash, tab_watch, tab_reb, tab_esc, tab_tx = st.tabs([
-    "📊 Resumen Visual", "🎯 Radar Watchlist", "⚖️ Rebalanceador", "🌪️ Riesgo Histórico", "⚙️ Bitácora"
+tab_dash, tab_watch, tab_scan, tab_reb, tab_esc, tab_tx = st.tabs([
+    "📊 Resumen Visual", "🎯 Radar Watchlist", "📡 Auto-Scanner", "⚖️ Rebalanceador", "🌪️ Riesgo Histórico", "⚙️ Bitácora"
 ])
 
 with tab_dash:
@@ -335,6 +336,50 @@ with tab_watch:
                     )
         else:
             st.info("El Radar está vacío. Agrega acciones a la izquierda para que el sistema las evalúe.")
+
+with tab_scan:
+    st.subheader("📡 Auto-Scanner Institucional")
+    st.markdown("Busca oportunidades de inversión en tiempo real sobre universos completos.")
+    
+    col_s1, col_s2 = st.columns([1, 4])
+    with col_s1:
+        st.write("Configuración")
+        selected_universe = st.selectbox("Universo a Escanear", list(UNIVERSES.keys()))
+        min_kelly_filter = st.slider("Min. Kelly %", min_value=0.01, max_value=0.20, value=0.05, step=0.01)
+        run_scan = st.button("🚀 Ejecutar Escáner")
+        
+    with col_s2:
+        if run_scan:
+            with st.spinner(f"Escaneando {selected_universe}... esto puede tomar un momento."):
+                scanner = AutoScanner()
+                try:
+                    df_opps = scanner.scan_universe(selected_universe, min_kelly=min_kelly_filter)
+                    if df_opps.empty:
+                        st.warning("No se encontraron oportunidades que cumplan los estrictos filtros de riesgo y margen de seguridad.")
+                    else:
+                        st.success(f"¡Se encontraron {len(df_opps)} oportunidades doradas!")
+                        
+                        # Formato visual
+                        def color_scanner_signal(val):
+                            if 'FUERTE' in str(val): return 'background-color: #1e3d2f; color: #2ecc71; font-weight: bold;'
+                            return 'background-color: #1a2f24; color: #2ecc71;'
+                            
+                        styled_opps = df_opps[['ticker', 'current_price', 'composite_z', 'prob_success', 'kelly_fraction', 'Signal']].style.map(color_scanner_signal, subset=['Signal'])
+                        
+                        st.dataframe(
+                            styled_opps,
+                            use_container_width=True, hide_index=True,
+                            column_config={
+                                "current_price": st.column_config.NumberColumn("Precio", format="$%.2f"),
+                                "composite_z": st.column_config.NumberColumn("Z-Score", format="%.2f"),
+                                "prob_success": st.column_config.NumberColumn("Prob. Éxito", format="%.2f"),
+                                "kelly_fraction": st.column_config.NumberColumn("Kelly Target", format="%.2%"),
+                            }
+                        )
+                        
+                        st.info("💡 Consejo: Copia los Tickers que te interesen y agrégalos manualmente al Radar Watchlist para seguimiento diario.")
+                except Exception as e:
+                    st.error(f"Error en escáner: {e}")
 
 with tab_reb:
     st.subheader("⚖️ Rebalanceo de Portafolio Existente")

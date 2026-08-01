@@ -14,21 +14,36 @@ def fetch_live_data(tickers: list) -> pd.DataFrame:
     for ticker in tickers:
         try:
             stock = yf.Ticker(ticker)
-            info = stock.info
             
-            # yfinance cambia sus llaves a veces; usamos .get para evitar Crash
-            current_price = info.get('currentPrice', info.get('regularMarketPrice', 0.0))
-            eps = info.get('trailingEps', 0.0)
-            pe = info.get('trailingPE', 0.0)
+            # Obtener precio de la forma más robusta posible (fast_info o history)
+            current_price = 0.0
+            try:
+                current_price = float(stock.fast_info.last_price)
+            except Exception:
+                try:
+                    hist = stock.history(period="1d")
+                    if not hist.empty:
+                        current_price = float(hist['Close'].iloc[-1])
+                except Exception:
+                    pass
             
+            # Intentar obtener EPS y PE, pero si falla que no afecte al precio
+            eps = 0.0
+            pe = 0.0
+            try:
+                info = stock.info
+                eps = info.get('trailingEps', 0.0) or 0.0
+                pe = info.get('trailingPE', 0.0) or 0.0
+            except Exception:
+                pass # Silenciar fallos de .info (común en Streamlit Cloud por rate limiting)
+                
             data.append({
                 'ticker': ticker,
                 'current_price': current_price,
                 'eps': eps,
                 'pe': pe
             })
-        except Exception as e:
-            # Silenciamos el error en la UI, pero evitamos que un ticker malo tumbe la app
+        except Exception:
             data.append({
                 'ticker': ticker,
                 'current_price': 0.0,

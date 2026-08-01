@@ -1,12 +1,14 @@
 import math
 
 class BayesianSignal:
-    def __init__(self, payoff_ratio: float = 3.0):
+    def __init__(self, payoff_ratio: float = 3.0, risk_multiplier: float = 1.0):
         """
         payoff_ratio: (Ganancia Promedio / Pérdida Promedio).
+        risk_multiplier: Factor de ajuste conservador aplicado al Kelly (0 a 1).
         Por defecto 3.0 asume que los ganadores rinden 3x más que lo que se pierde en los perdedores.
         """
         self.payoff_ratio = payoff_ratio
+        self.risk_multiplier = risk_multiplier
         
     def _sigmoid(self, x: float) -> float:
         """Función logística estándar"""
@@ -43,16 +45,17 @@ class BayesianSignal:
         q = 1.0 - p
         b = self.payoff_ratio
         
-        kelly_fraction = (p * b - q) / b
+        full_kelly = (p * b - q) / b
         
-        # Half-Kelly (más conservador)
-        half_kelly = max(0.0, kelly_fraction * 0.5)
+        # Half-Kelly (más conservador) y ajuste por multiplicador
+        half_kelly = max(0.0, full_kelly * 0.5)
+        adjusted_kelly = half_kelly * self.risk_multiplier
         
-        signal_label = self._classify(p, half_kelly)
+        signal_label = self._classify(p, adjusted_kelly)
         
         return {
             'prob_success': prob_success,
-            'kelly_fraction': half_kelly,
+            'kelly_fraction': adjusted_kelly,
             'Signal': signal_label
         }
         

@@ -12,7 +12,8 @@ from modules.quant_engine import fetch_quant_data
 from modules.signal_engine import BayesianSignal
 from modules.valuation import calculate_fair_value
 from modules.scanner import AutoScanner, UNIVERSES
-from portfolio_config import MAX_STOCK_WEIGHT, MAX_ETF_WEIGHT, MIN_CASH_TARGET
+from modules.risk_manager import RiskManager
+from portfolio_config import MAX_STOCK_WEIGHT, MAX_ETF_WEIGHT
 
 st.set_page_config(page_title="Terminal Cuantitativo LP", page_icon="📈", layout="wide", initial_sidebar_state="collapsed")
 
@@ -30,10 +31,27 @@ def calc_mos(row):
         return val['margin_of_safety']
     return -1.0
 
+@st.cache_data(ttl=3600)
+def get_market_regime():
+    return RiskManager().detect_market_regime()
+
+regime_data = get_market_regime()
+dynamic_min_cash = regime_data['cash_target']
+risk_multiplier = regime_data['risk_multiplier']
+
 # --- BARRA LATERAL ---
 with st.sidebar:
     st.header("🛡️ Reglas de Riesgo Activas")
-    st.info(f"🔹 Máx. por Acción: {MAX_STOCK_WEIGHT*100}%\n\n🔹 Máx. Total ETFs: {MAX_ETF_WEIGHT*100}%\n\n🔹 Efectivo Mínimo: {MIN_CASH_TARGET*100}%")
+    st.info(f"🔹 Máx. por Acción: {MAX_STOCK_WEIGHT*100}%\n\n🔹 Máx. Total ETFs: {MAX_ETF_WEIGHT*100}%\n\n🔹 Efectivo Mínimo: {dynamic_min_cash*100}%")
+    
+    st.markdown("---")
+    st.subheader("🌐 Régimen Macro")
+    color = "🟢" if "Bull" in regime_data['regime'] else ("🟡" if "Correction" in regime_data['regime'] else "🔴")
+    st.markdown(f"**Estado:** {color} {regime_data['regime']}")
+    st.markdown(f"**SPY:** ${regime_data['spy_price']:.2f} (SMA200: ${regime_data['spy_sma200']:.2f})")
+    st.markdown(f"**VIX:** {regime_data['vix']:.2f}")
+    st.markdown(f"**Apetito de Riesgo:** {risk_multiplier}x")
+    
     st.markdown("---")
     st.info("📸 El Snapshot histórico se guarda automáticamente una vez al día.")
 
@@ -108,8 +126,8 @@ if not df_pos.empty:
             
             df_enriched['margin_of_safety'] = df_enriched.apply(calc_mos, axis=1)
             
-            # Scores
-            signal_engine = BayesianSignal(payoff_ratio=3.0)
+            # Scores con gestión de riesgo macro
+            signal_engine = BayesianSignal(payoff_ratio=3.0, risk_multiplier=risk_multiplier)
             def _apply_signal(row):
                 return signal_engine.generate_signal(row.get('composite_z', 0), row.get('margin_of_safety', 0))
                 
@@ -249,7 +267,7 @@ with tab_watch:
                 if not df_wq.empty:
                     df_wq['margin_of_safety'] = df_wq.apply(calc_mos, axis=1)
                     
-                    signal_engine = BayesianSignal(payoff_ratio=3.0)
+                    signal_engine = BayesianSignal(payoff_ratio=3.0, risk_multiplier=risk_multiplier)
                     w_scores = df_wq.apply(lambda r: signal_engine.generate_signal(r.get('composite_z', 0), r.get('margin_of_safety', 0)), axis=1)
                     w_scores_df = pd.DataFrame(list(w_scores))
                     df_wq = pd.concat([df_wq, w_scores_df], axis=1)
@@ -395,7 +413,7 @@ with tab_reb:
         
         # Ajuste global para respetar el cash
         total_target = df_buy['target_weight'].sum()
-        max_investable = 1.0 - MIN_CASH_TARGET
+        max_investable = 1.0 - dynamic_min_cash
         if total_target > max_investable and total_target > 0:
             df_buy['target_weight'] = (df_buy['target_weight'] / total_target) * max_investable
         elif total_target == 0:
@@ -427,16 +445,19 @@ with tab_esc:
             st.info("Sin histórico suficiente.")
             
     with colB:
-        st.markdown("**Test de Estrés (Impacto en USD)**")
+        st.markdown(f"**Test de Estrés (Beta Ponderado: {beta_val:.2f})**")
         if not df_enriched.empty:
             val = portfolio_net_worth
             scenarios = [
-                {"Escenario": "Corrección Merc. (-10%)", "Impacto": -0.10 * beta_val * val},
-                {"Escenario": "Bear Market (-25%)", "Impacto": -0.25 * beta_val * val},
-                {"Escenario": "Crisis Grave (-40%)", "Impacto": -0.40 * beta_val * val},
+                {"Escenario": "Shock Leve (-10%)", "Impacto (VaR)": -0.10 * beta_val * val, "Colchón Cash": total_cash},
+                {"Escenario": "Bear Market (-25%)", "Impacto (VaR)": -0.25 * beta_val * val, "Colchón Cash": total_cash},
+                {"Escenario": "Black Swan (-40%)", "Impacto (VaR)": -0.40 * beta_val * val, "Colchón Cash": total_cash},
             ]
             df_esc = pd.DataFrame(scenarios)
-            st.dataframe(df_esc, hide_index=True, column_config={"Impacto": st.column_config.NumberColumn(format="-$%.2f")})
+            st.dataframe(df_esc, hide_index=True, column_config={
+                "Impacto (VaR)": st.column_config.NumberColumn(format="-$%.2f"),
+                "Colchón Cash": st.column_config.NumberColumn(format="$%.2f")
+            })
 
 with tab_tx:
     st.subheader("⚙️ Registro y Bitácora de Transacciones")

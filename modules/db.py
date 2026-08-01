@@ -8,7 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import streamlit as st
 from sqlalchemy import create_engine, Column, Integer, String, Float, Date, Identity
 from sqlalchemy.orm import declarative_base, sessionmaker
-from config import DB_PATH, DATA_DIR
+from portfolio_config import DB_PATH, DATA_DIR
 
 # Asegurar que el directorio de la base de datos local exista
 os.makedirs(DATA_DIR, exist_ok=True)

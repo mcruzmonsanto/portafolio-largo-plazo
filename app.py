@@ -9,7 +9,7 @@ import plotly.graph_objects as go
 from modules.db import engine, Position, CashFlow, Transaction, PortfolioSnapshot, WatchlistItem
 from modules.quant_engine import fetch_quant_data, calculate_scores
 from modules.valuation import calculate_fair_value
-from config import MAX_STOCK_WEIGHT, MAX_ETF_WEIGHT, MIN_CASH_TARGET
+from portfolio_config import MAX_STOCK_WEIGHT, MAX_ETF_WEIGHT, MIN_CASH_TARGET
 
 st.set_page_config(page_title="Terminal Cuantitativo LP", page_icon="📈", layout="wide", initial_sidebar_state="collapsed")
 

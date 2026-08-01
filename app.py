@@ -201,9 +201,10 @@ with tab_watch:
                             session.add(WatchlistItem(ticker=new_wticker, added_date=date.today(), notes=w_notes))
                             session.commit()
                             st.success(f"{new_wticker} agregado.")
+                            load_watchlist.clear()
                             st.rerun()
                 except Exception as e:
-                    st.error("Error agregando a watchlist.")
+                    st.error(f"Error agregando a watchlist: {e}")
                     
         with st.form("del_watch_form"):
             del_wticker = st.selectbox("Eliminar Ticker", df_watch['ticker'].tolist() if not df_watch.empty else ["Vacío"])
@@ -214,6 +215,7 @@ with tab_watch:
                     if wt:
                         session.delete(wt)
                         session.commit()
+                        load_watchlist.clear()
                         st.rerun()
 
     with col_w2:
@@ -394,6 +396,9 @@ with tab_tx:
                     multiplier = -1 if op_action == "WITHDRAW" else 1
                     session.add(CashFlow(date=op_date, amount=op_price * multiplier, type=op_action))
                 session.commit()
+                load_positions.clear()
+                load_cash_flows.clear()
+                load_transactions.clear()
                 st.session_state["op_msg"] = "✅ Operación registrada."
             st.rerun()
         except Exception as e:

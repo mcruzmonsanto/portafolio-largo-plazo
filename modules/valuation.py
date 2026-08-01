@@ -1,4 +1,4 @@
-from config import GRAHAM_WEIGHT, MULTIPLE_WEIGHT
+from portfolio_config import GRAHAM_WEIGHT, MULTIPLE_WEIGHT
 
 def calculate_fair_value(eps: float, target_pe: float, growth_rate: float, current_price: float, bond_yield: float = 4.4) -> dict:
     """

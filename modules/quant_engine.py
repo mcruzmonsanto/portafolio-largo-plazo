@@ -1,6 +1,7 @@
 import yfinance as yf
 import pandas as pd
 import numpy as np
+import concurrent.futures
 
 def fetch_quant_data(tickers):
     """
@@ -27,6 +28,19 @@ def fetch_quant_data(tickers):
         spy_returns = spy_close.pct_change().dropna()
     else:
         spy_returns = pd.Series(dtype=float)
+
+    # Descarga rápida de fundamentales (Market Cap, Target Price)
+    fundamentals = {}
+    def get_info(t):
+        try:
+            info = yf.Ticker(t).info
+            return t, info.get('marketCap'), info.get('targetMeanPrice')
+        except:
+            return t, None, None
+            
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        for t, mcap, tgt in executor.map(get_info, tickers):
+            fundamentals[t] = {'market_cap': mcap, 'target_price': tgt}
 
     for ticker in tickers:
         try:
@@ -72,6 +86,8 @@ def fetch_quant_data(tickers):
             true_range = np.max(ranges, axis=1)
             atr = float(true_range.rolling(14).mean().iloc[-1])
             
+            
+            fund = fundamentals.get(ticker, {})
             results.append({
                 'ticker': ticker,
                 'current_price': current_price,
@@ -80,7 +96,9 @@ def fetch_quant_data(tickers):
                 'ma200': ma200,
                 'volatility': volatility,
                 'beta': beta,
-                'atr': atr
+                'atr': atr,
+                'market_cap': fund.get('market_cap'),
+                'target_price': fund.get('target_price')
             })
         except Exception as e:
             print(f"Error procesando {ticker}: {e}")
@@ -132,17 +150,15 @@ def calculate_scores(row, quality_score_default=85):
     risk_inverted = 100 - risk_score
     conviction_score = (value_score * 0.35) + (trend_score * 0.25) + (quality_score * 0.20) + (risk_inverted * 0.20)
     
-    # 6. Señal
+    # 6. Señal (Nuevo requerimiento del usuario)
     if conviction_score >= 80:
-        signal = "STRONG BUY"
+        signal = "COMPRA FUERTE"
     elif conviction_score >= 65:
-        signal = "BUY"
-    elif conviction_score >= 50:
-        signal = "HOLD"
-    elif conviction_score >= 35:
-        signal = "REDUCE"
+        signal = "COMPRA"
+    elif conviction_score >= 45:
+        signal = "ESPERAR"
     else:
-        signal = "AVOID"
+        signal = "NO COMPRAR"
         
     return {
         'TrendScore': round(trend_score, 1),

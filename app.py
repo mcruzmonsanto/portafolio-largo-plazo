@@ -233,7 +233,7 @@ with tab_watch:
                     
                     # Lógica de "Sugerencia de Compra"
                     def get_buy_suggestion(row):
-                        if row['Signal'] not in ['STRONG BUY', 'BUY']:
+                        if row['Signal'] not in ['COMPRA FUERTE', 'COMPRA']:
                             return "Mantenerse al margen"
                             
                         # Limite según tipo de activo
@@ -261,11 +261,30 @@ with tab_watch:
                         
                     df_wq['Action_Plan'] = df_wq.apply(get_buy_suggestion, axis=1)
                     
+                    # Calcular Upside %
+                    df_wq['upside_pct'] = 0.0
+                    for idx, r in df_wq.iterrows():
+                        if pd.notna(r.get('target_price')) and pd.notna(r.get('current_price')) and r['current_price'] > 0:
+                            df_wq.at[idx, 'upside_pct'] = (r['target_price'] - r['current_price']) / r['current_price']
+                    
+                    # Formato de Market Cap en Billones (B) / Trillones (T)
+                    def format_mcap(val):
+                        if pd.isna(val): return "-"
+                        if val >= 1e12: return f"${val/1e12:.2f}T"
+                        if val >= 1e9: return f"${val/1e9:.2f}B"
+                        if val >= 1e6: return f"${val/1e6:.2f}M"
+                        return f"${val:,.0f}"
+                        
+                    df_wq['market_cap_str'] = df_wq['market_cap'].apply(format_mcap)
+                    
                     st.dataframe(
-                        df_wq[['ticker', 'current_price', 'Signal', 'ConvictionScore', 'RiskScore', 'Action_Plan', 'notes']],
+                        df_wq[['ticker', 'current_price', 'target_price', 'upside_pct', 'market_cap_str', 'Signal', 'ConvictionScore', 'RiskScore', 'Action_Plan', 'notes']],
                         use_container_width=True, hide_index=True,
                         column_config={
                             "current_price": st.column_config.NumberColumn("Precio", format="$%.2f"),
+                            "target_price": st.column_config.NumberColumn("Precio Obj.", format="$%.2f"),
+                            "upside_pct": st.column_config.NumberColumn("Upside", format="%.2%"),
+                            "market_cap_str": "Market Cap",
                             "Action_Plan": "Plan de Acción Sugerido",
                             "notes": "Tesis"
                         }

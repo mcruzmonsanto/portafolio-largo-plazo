@@ -91,9 +91,10 @@ df_snap = load_snapshots()
 df_watch = load_watchlist()
 
 # --- CÁLCULO DE LIQUIDEZ Y VALORACIÓN BÁSICA ---
-with Session(engine) as session:
-    lm = LedgerManager(session)
-    total_cash = lm.get_cash_balance()
+cash_injected = df_cash['amount'].sum() if not df_cash.empty else 0.0
+cash_spent = (df_tx[df_tx['action'] == 'BUY']['quantity'] * df_tx[df_tx['action'] == 'BUY']['price']).sum() if not df_tx.empty else 0.0
+cash_gained = (df_tx[df_tx['action'] == 'SELL']['quantity'] * df_tx[df_tx['action'] == 'SELL']['price']).sum() if not df_tx.empty else 0.0
+total_cash = cash_injected - cash_spent + cash_gained
 total_cost_basis = (df_pos['quantity'] * df_pos['average_cost']).sum() if not df_pos.empty else 0.0
 
 total_market_value = 0.0
@@ -560,7 +561,12 @@ with tab_tx:
             st.error(f"Error BD: {e}")
 
     st.divider()
-    st.subheader("📜 Historial de Transacciones")
+    st.subheader("📜 Historial de Transacciones (Acciones)")
     if not df_tx.empty:
         df_tx_display = df_tx.sort_values(by='date', ascending=False)
         st.dataframe(df_tx_display[['id', 'date', 'ticker', 'action', 'quantity', 'price', 'reason']], use_container_width=True, hide_index=True)
+        
+    st.subheader("💸 Historial de Movimientos (Efectivo)")
+    if not df_cash.empty:
+        df_cash_display = df_cash.sort_values(by='date', ascending=False)
+        st.dataframe(df_cash_display[['id', 'date', 'type', 'amount']], use_container_width=True, hide_index=True, column_config={"amount": st.column_config.NumberColumn("Monto", format="$%.2f")})

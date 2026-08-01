@@ -18,8 +18,7 @@ with st.sidebar:
     default_quality = st.slider("Quality Score Pordefecto", 0, 100, 85)
     
     st.markdown("---")
-    if st.button("📸 Guardar Snapshot Histórico"):
-        st.session_state["save_snapshot"] = True
+    st.info("📸 El Snapshot histórico se guarda automáticamente una vez al día.")
 
 # --- CARGA DE DATOS DESDE BASE DE DATOS ---
 @st.cache_data(ttl=60)
@@ -96,22 +95,24 @@ if not df_pos.empty:
             
             df_enriched['weight'] = df_enriched['market_value'] / portfolio_net_worth if portfolio_net_worth > 0 else 0
 
-# --- LÓGICA DE GUARDADO DE SNAPSHOT ---
-if st.session_state.get("save_snapshot"):
-    try:
-        with Session(engine) as session:
-            today = date.today()
-            exist = session.query(PortfolioSnapshot).filter_by(date=today).first()
-            if not exist:
-                snap = PortfolioSnapshot(date=today, total_value=portfolio_net_worth, cash=total_cash, unrealized_pl=total_unrealized_pl)
-                session.add(snap)
-                session.commit()
-                st.sidebar.success("📸 Snapshot de hoy guardado exitosamente.")
-            else:
-                st.sidebar.warning("⚠️ Ya existe un snapshot para el día de hoy.")
-    except Exception as e:
-        st.sidebar.error(f"Error guardando snapshot: {e}")
-    st.session_state["save_snapshot"] = False
+# --- LÓGICA DE GUARDADO DE SNAPSHOT AUTOMÁTICO ---
+try:
+    with Session(engine) as session:
+        today = date.today()
+        exist = session.query(PortfolioSnapshot).filter_by(date=today).first()
+        if not exist and portfolio_net_worth > 0:
+            # Casteamos a float() puro de Python para evitar el bug de np.float64 en psycopg2
+            snap = PortfolioSnapshot(
+                date=today, 
+                total_value=float(portfolio_net_worth), 
+                cash=float(total_cash), 
+                unrealized_pl=float(total_unrealized_pl)
+            )
+            session.add(snap)
+            session.commit()
+except Exception as e:
+    pass # Si falla (ej: sin conexión momentánea), simplemente lo ignora para no crashear la UI
+
 
 # Tarjetas Métricas
 col1, col2, col3, col4, col5 = st.columns(5)

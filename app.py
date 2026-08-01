@@ -287,14 +287,14 @@ with tab_watch:
                     def color_watchlist_signal(val):
                         if pd.isna(val): return ''
                         val_str = str(val)
-                        if 'COMPRA FUERTE' in val_str:
+                        if 'NO COMPRAR' in val_str or 'tope' in val_str or 'Insuficiente' in val_str:
+                            return 'background-color: #3b1c1c; color: #e74c3c;'
+                        elif 'COMPRA FUERTE' in val_str:
                             return 'background-color: #1e3d2f; color: #2ecc71; font-weight: bold;'
                         elif 'COMPRA' in val_str:
                             return 'background-color: #1a2f24; color: #2ecc71;'
                         elif 'ESPERAR' in val_str or 'Mantener' in val_str:
                             return 'background-color: #40320a; color: #f1c40f;'
-                        elif 'NO COMPRAR' in val_str or 'tope' in val_str or 'Insuficiente' in val_str:
-                            return 'background-color: #3b1c1c; color: #e74c3c;'
                         return ''
                         
                     styled_df = df_wq[['ticker', 'current_price', 'target_price', 'upside_pct', 'time_to_target_months', 'market_cap_billions', 'beta', 'Signal', 'ConvictionScore', 'Action_Plan', 'notes']].style.map(color_watchlist_signal, subset=['Signal', 'Action_Plan'])

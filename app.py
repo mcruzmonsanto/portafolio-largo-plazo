@@ -222,6 +222,7 @@ with tab_watch:
         if not df_watch.empty:
             w_tickers = df_watch['ticker'].tolist()
             with st.spinner("Analizando Radar..."):
+                import math
                 df_wq = fetch_quant_data(w_tickers)
                 if not df_wq.empty:
                     w_scores = df_wq.apply(lambda r: calculate_scores(r, DEFAULT_QUALITY_SCORE), axis=1)
@@ -255,9 +256,12 @@ with tab_watch:
                             
                         max_usd_alloc = portfolio_net_worth * space_left_pct
                         invest_usd = min(max_usd_alloc, available_cash)
-                        shares_to_buy = invest_usd / row['current_price']
-                        
-                        return f"Comprar {shares_to_buy:.2f} accs (~${invest_usd:,.0f})"
+                        shares_to_buy = math.floor(invest_usd / row['current_price'])
+                        if shares_to_buy < 1:
+                            return "Capital Insuficiente"
+                            
+                        real_invest = shares_to_buy * row['current_price']
+                        return f"Comprar {shares_to_buy} accs (~${real_invest:,.0f})"
                         
                     df_wq['Action_Plan'] = df_wq.apply(get_buy_suggestion, axis=1)
                     
@@ -279,8 +283,24 @@ with tab_watch:
                     # Convertir Market Cap a Billones (B) para que sea numérico y se pueda ordenar
                     df_wq['market_cap_billions'] = df_wq['market_cap'] / 1e9
                     
+                    # Estilos visuales de la señal
+                    def color_watchlist_signal(val):
+                        if pd.isna(val): return ''
+                        val_str = str(val)
+                        if 'COMPRA FUERTE' in val_str:
+                            return 'background-color: #1e3d2f; color: #2ecc71; font-weight: bold;'
+                        elif 'COMPRA' in val_str:
+                            return 'background-color: #1a2f24; color: #2ecc71;'
+                        elif 'ESPERAR' in val_str or 'Mantener' in val_str:
+                            return 'color: #95a5a6;'
+                        elif 'NO COMPRAR' in val_str or 'tope' in val_str or 'Insuficiente' in val_str:
+                            return 'color: #e74c3c;'
+                        return ''
+                        
+                    styled_df = df_wq[['ticker', 'current_price', 'target_price', 'upside_pct', 'time_to_target_months', 'market_cap_billions', 'beta', 'Signal', 'ConvictionScore', 'Action_Plan', 'notes']].style.map(color_watchlist_signal, subset=['Signal', 'Action_Plan'])
+                    
                     st.dataframe(
-                        df_wq[['ticker', 'current_price', 'target_price', 'upside_pct', 'time_to_target_months', 'market_cap_billions', 'beta', 'Signal', 'ConvictionScore', 'Action_Plan', 'notes']],
+                        styled_df,
                         use_container_width=True, hide_index=True,
                         column_config={
                             "current_price": st.column_config.NumberColumn("Precio", format="$%.2f"),

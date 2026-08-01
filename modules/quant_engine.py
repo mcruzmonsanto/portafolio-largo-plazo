@@ -34,15 +34,21 @@ def fetch_quant_data(tickers):
     def get_info(t):
         try:
             info = yf.Ticker(t).info
-            growth_raw = info.get('revenueGrowth') or info.get('earningsGrowth') or 0.05
-            growth_clamped = max(-0.10, min(growth_raw, 0.30))
-            return t, info.get('marketCap'), info.get('targetMeanPrice'), info.get('trailingEps'), growth_clamped
+            return t, info.get('marketCap'), info.get('targetMeanPrice'), info.get('trailingEps'), \
+                   info.get('revenueGrowth') or info.get('earningsGrowth') or 0.05, \
+                   info.get('returnOnEquity'), info.get('operatingMargins') or info.get('profitMargins'), \
+                   info.get('debtToEquity')
         except:
-            return t, None, None, None, 0.05
+            return t, None, None, None, 0.05, None, None, None
             
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-        for t, mcap, tgt, eps, growth in executor.map(get_info, tickers):
-            fundamentals[t] = {'market_cap': mcap, 'target_price': tgt, 'eps': eps, 'growth': growth}
+        for t, mcap, tgt, eps, growth, roe, op_margin, debt_eq in executor.map(get_info, tickers):
+            growth_clamped = max(-0.10, min(growth, 0.30))
+            fundamentals[t] = {
+                'market_cap': mcap, 'target_price': tgt, 'eps': eps, 
+                'growth': growth_clamped, 'roe': roe, 'op_margin': op_margin, 
+                'debt_equity': debt_eq
+            }
 
     for ticker in tickers:
         try:
@@ -102,12 +108,40 @@ def fetch_quant_data(tickers):
                 'market_cap': fund.get('market_cap'),
                 'target_price': fund.get('target_price'),
                 'eps': fund.get('eps'),
-                'growth': fund.get('growth')
+                'growth': fund.get('growth'),
+                'roe': fund.get('roe'),
+                'op_margin': fund.get('op_margin'),
+                'debt_equity': fund.get('debt_equity')
             })
         except Exception as e:
             print(f"Error procesando {ticker}: {e}")
             
     return pd.DataFrame(results)
+
+def _score_metric(value, low, high, invert=False, neutral=50):
+    """Escala 'value' linealmente a un score 0-100 entre low y high.
+    invert=True cuando un valor MAYOR es PEOR (ej. deuda)."""
+    if value is None:
+        return neutral
+    if invert:
+        value, low, high = -value, -high, -low
+    if value <= low:
+        return 0.0
+    if value >= high:
+        return 100.0
+    return (value - low) / (high - low) * 100.0
+
+def calculate_quality_score(row):
+    """Quality Score real (0-100) basado en ROE, margen operativo y apalancamiento."""
+    roe = row.get('roe')
+    op_margin = row.get('op_margin')
+    debt_eq = row.get('debt_equity') # yfinance lo da como % (ej. 154.3 = D/E de 1.54)
+    
+    roe_score = _score_metric(roe, low=0.05, high=0.30)        # ROE 5%->0, 30%+->100
+    margin_score = _score_metric(op_margin, low=0.05, high=0.35) # Margen 5%->0, 35%+->100
+    debt_score = _score_metric(debt_eq, low=0, high=250, invert=True) # D/E 0->100, 250%+->0
+    
+    return round((roe_score * 0.35) + (margin_score * 0.35) + (debt_score * 0.30), 1)
 
 def calculate_scores(row, quality_score_default=85):
     """
@@ -148,7 +182,7 @@ def calculate_scores(row, quality_score_default=85):
         value_score = 10
         
     # 4. Quality Score
-    quality_score = quality_score_default
+    quality_score = calculate_quality_score(row)
     
     # 5. Conviction Score (Ponderación Maestro)
     risk_inverted = 100 - risk_score

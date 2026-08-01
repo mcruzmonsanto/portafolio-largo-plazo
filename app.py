@@ -1,238 +1,233 @@
 import streamlit as st
 import pandas as pd
+from datetime import date
 from sqlalchemy.orm import Session
-from modules.db import engine, Position, CashFlow, Transaction
+from modules.db import engine, Position, CashFlow, Transaction, PortfolioSnapshot
 from modules.market_data import fetch_live_data
 from modules.valuation import calculate_fair_value
+from modules.quant_engine import fetch_quant_data, calculate_scores
 
-# Configuración de página optimizada para escritorio y móvil (responsive)
-st.set_page_config(
-    page_title="Sistema de Portafolio de Largo Plazo",
-    page_icon="📈",
-    layout="wide",
-    initial_sidebar_state="collapsed"
-)
+st.set_page_config(page_title="Terminal Cuantitativo LP", page_icon="📈", layout="wide", initial_sidebar_state="expanded")
 
-# --- CARGA DE DATOS DESDE BASE DE DATOS (SUPABASE / SQLITE) ---
+# --- BARRA LATERAL (CONFIGURACIÓN INSTITUCIONAL) ---
+with st.sidebar:
+    st.header("⚙️ Parámetros de Riesgo")
+    max_weight = st.slider("Peso Máximo por Posición", 5, 30, 15, format="%d%%") / 100
+    target_cash = st.slider("Efectivo Objetivo", 0, 30, 10, format="%d%%") / 100
+    default_pe = st.number_input("PE Objetivo Global", value=25)
+    default_quality = st.slider("Quality Score Pordefecto", 0, 100, 85)
+    
+    st.markdown("---")
+    if st.button("📸 Guardar Snapshot Histórico"):
+        st.session_state["save_snapshot"] = True
+
+# --- CARGA DE DATOS DESDE BASE DE DATOS ---
 @st.cache_data(ttl=60)
 def load_positions():
     with engine.connect() as conn:
-        df = pd.read_sql("SELECT * FROM positions", conn)
-    return df
+        return pd.read_sql("SELECT * FROM positions", conn)
 
 @st.cache_data(ttl=60)
 def load_cash_flows():
     with engine.connect() as conn:
-        df = pd.read_sql("SELECT * FROM cash_flows", conn)
-    return df
+        return pd.read_sql("SELECT * FROM cash_flows", conn)
 
 @st.cache_data(ttl=60)
 def load_transactions():
     with engine.connect() as conn:
-        df = pd.read_sql("SELECT * FROM transactions", conn)
-    return df
+        return pd.read_sql("SELECT * FROM transactions", conn)
 
-# --- HEADER EJECUTIVO SUPERIOR ---
-st.title("🏛️ Sistema de Portafolio Largo Plazo")
+@st.cache_data(ttl=60)
+def load_snapshots():
+    with engine.connect() as conn:
+        return pd.read_sql("SELECT * FROM portfolio_history ORDER BY date ASC", conn)
+
+st.title("🏛️ Terminal Cuantitativo Institucional")
 st.markdown("---")
 
 df_pos = load_positions()
 df_cash = load_cash_flows()
 df_tx = load_transactions()
+df_snap = load_snapshots()
 
-# Cálculo de Liquidez (Cash real)
+# Cálculo de Liquidez
 cash_deposits = df_cash['amount'].sum() if not df_cash.empty else 0.0
-
-if not df_pos.empty:
-    total_cost_basis = (df_pos['quantity'] * df_pos['average_cost']).sum()
-else:
-    total_cost_basis = 0.0
-
+total_cost_basis = (df_pos['quantity'] * df_pos['average_cost']).sum() if not df_pos.empty else 0.0
 total_cash = cash_deposits - total_cost_basis
 
-# Simulación de cotizaciones de mercado actuales para el dashboard ejecutivo
-market_prices = {"AMZN": 220.0, "AVGO": 370.0, "GOOGL": 320.0, "META": 556.70, "MSFT": 464.72, 
-                 "NVDA": 100.37, "PLTR": 110.0, "QQQM": 283.29, "SMH": 270.26, "SPMO": 150.0}
+total_market_value = 0.0
+total_unrealized_pl = 0.0
+portfolio_net_worth = total_cash
+
+df_enriched = pd.DataFrame()
 
 if not df_pos.empty:
-    df_pos['current_price'] = df_pos['ticker'].map(market_prices).fillna(df_pos['average_cost'])
-    df_pos['market_value'] = df_pos['quantity'] * df_pos['current_price']
-    df_pos['cost_basis'] = df_pos['quantity'] * df_pos['average_cost']
-    df_pos['unrealized_pl'] = df_pos['market_value'] - df_pos['cost_basis']
-    df_pos['unrealized_pl_pct'] = (df_pos['unrealized_pl'] / df_pos['cost_basis']) * 100
-    
-    total_market_value = df_pos['market_value'].sum()
-    total_cost_basis = df_pos['cost_basis'].sum()
-    total_unrealized_pl = df_pos['unrealized_pl'].sum()
-    portfolio_net_worth = total_market_value + total_cash
-else:
-    total_market_value = 0.0
-    total_cost_basis = 0.0
-    total_unrealized_pl = 0.0
-    portfolio_net_worth = total_cash
+    with st.spinner("Descargando data de mercado y calculando métricas (yfinance)..."):
+        tickers = df_pos['ticker'].tolist()
+        df_quant = fetch_quant_data(tickers)
+        
+        if not df_quant.empty:
+            # Unir datos
+            df_enriched = pd.merge(df_pos, df_quant, on='ticker', how='left')
+            
+            # Si un ticker no descargó precio, usamos su costo promedio
+            df_enriched['current_price'] = df_enriched['current_price'].fillna(df_enriched['average_cost'])
+            
+            # Cálculos financieros base
+            df_enriched['market_value'] = df_enriched['quantity'] * df_enriched['current_price']
+            df_enriched['cost_basis'] = df_enriched['quantity'] * df_enriched['average_cost']
+            df_enriched['unrealized_pl'] = df_enriched['market_value'] - df_enriched['cost_basis']
+            df_enriched['unrealized_pl_pct'] = (df_enriched['unrealized_pl'] / df_enriched['cost_basis']) * 100
+            
+            # Calcular margin_of_safety heurístico (si tenemos fv graham guardado)
+            df_enriched['margin_of_safety'] = 0.0
+            for idx, row in df_enriched.iterrows():
+                if pd.notna(row['fair_value_graham']) and row['fair_value_graham'] > 0:
+                    df_enriched.at[idx, 'margin_of_safety'] = (row['fair_value_graham'] - row['current_price']) / row['current_price']
+            
+            # Ejecutar motor de scoring por fila
+            scores = df_enriched.apply(lambda r: calculate_scores(r, default_quality), axis=1)
+            scores_df = pd.DataFrame(list(scores))
+            df_enriched = pd.concat([df_enriched, scores_df], axis=1)
+            
+            total_market_value = df_enriched['market_value'].sum()
+            total_unrealized_pl = df_enriched['unrealized_pl'].sum()
+            portfolio_net_worth = total_market_value + total_cash
+            
+            df_enriched['weight'] = df_enriched['market_value'] / portfolio_net_worth if portfolio_net_worth > 0 else 0
 
-# Tarjetas Métricas Ejecutivas Superiores
+# --- LÓGICA DE GUARDADO DE SNAPSHOT ---
+if st.session_state.get("save_snapshot"):
+    try:
+        with Session(engine) as session:
+            today = date.today()
+            exist = session.query(PortfolioSnapshot).filter_by(date=today).first()
+            if not exist:
+                snap = PortfolioSnapshot(date=today, total_value=portfolio_net_worth, cash=total_cash, unrealized_pl=total_unrealized_pl)
+                session.add(snap)
+                session.commit()
+                st.sidebar.success("📸 Snapshot de hoy guardado exitosamente.")
+            else:
+                st.sidebar.warning("⚠️ Ya existe un snapshot para el día de hoy.")
+    except Exception as e:
+        st.sidebar.error(f"Error guardando snapshot: {e}")
+    st.session_state["save_snapshot"] = False
+
+# Tarjetas Métricas
 col1, col2, col3, col4, col5 = st.columns(5)
 col1.metric("Valor del Portafolio", f"${portfolio_net_worth:,.2f}")
-col2.metric("Efectivo Disponible", f"${total_cash:,.2f}")
-col3.metric("Capital Invertido", f"${total_cost_basis:,.2f}")
+col2.metric("Efectivo", f"${total_cash:,.2f}")
+col3.metric("Inv. Activa", f"${total_cost_basis:,.2f}")
 col4.metric("P/L Abierto", f"${total_unrealized_pl:,.2f}", delta=f"{(total_unrealized_pl/total_cost_basis*100):.2f}%" if total_cost_basis > 0 else "0.00%")
-col5.metric("P/L Realizado", "$2.11", delta="+0.06%")
+col5.metric("Riesgo Beta", f"{(df_enriched['beta'] * df_enriched['weight']).sum():.2f}" if not df_enriched.empty else "0.0")
 
 st.markdown("---")
 
-# --- NAVEGACIÓN PRINCIPAL POR TABS ---
-tab_dash, tab_watch, tab_tx = st.tabs(["📊 Dashboard Ejecutivo", "🔍 Watchlist", "⚙️ Bitácora de Transacciones"])
+tab_dash, tab_reb, tab_esc, tab_watch, tab_tx = st.tabs([
+    "📊 Holdings", "🎯 Señales & Rebalanceo", "🌪️ Evolución & Riesgo", "🔍 Watchlist", "⚙️ Bitácora"
+])
 
-# --- PESTAÑA 1: DASHBOARD EJECUTIVO ---
 with tab_dash:
-    st.subheader("📊 Holdings Summary")
-    
-    if not df_pos.empty:
-        sub_tab1, sub_tab2, sub_tab3, sub_tab4 = st.tabs(["Summary", "Holdings", "Fundamentals", "Performance"])
+    st.subheader("📊 Inventario y Métricas Institucionales")
+    if not df_enriched.empty:
+        disp_cols = ['ticker', 'current_price', 'quantity', 'cost_basis', 'market_value', 'weight', 'unrealized_pl_pct', 'Signal']
+        df_disp = df_enriched[disp_cols].copy()
         
-        with sub_tab1:
-            col_s1, col_s2, col_s3, col_s4 = st.columns(4)
-            col_s1.metric("Portfolio Value", f"${portfolio_net_worth:,.2f}")
-            col_s2.metric("Day Change", f"${total_market_value * 0.0178:+,.2f} (+1.78%)")
-            col_s3.metric("Unrealized G/L", f"${total_unrealized_pl:,.2f}", delta=f"{(total_unrealized_pl/total_cost_basis*100):.2f}%" if total_cost_basis > 0 else "0.00%")
-            col_s4.metric("Realized G/L", "$2.11", delta="+0.06%")
-            
-            st.markdown("---")
-            
-            market_data_ext = {
-                "MSFT": {"last": 464.72, "change_pct": 3.02, "change_val": 13.62, "currency": "USD", "volume": "56.469M", "shares": 1, "market_cap": "3.451T"},
-                "META": {"last": 556.71, "change_pct": 3.28, "change_val": 17.68, "currency": "USD", "volume": "24.156M", "shares": 2, "market_cap": "1.418T"},
-                "NVDA": {"last": 200.75, "change_pct": 2.93, "change_val": 5.71, "currency": "USD", "volume": "139.261M", "shares": 1, "market_cap": "4.862T"},
-                "QQQM": {"last": 283.29, "change_pct": 0.69, "change_val": 1.94, "currency": "USD", "volume": "3.472M", "shares": 3, "market_cap": "--"},
-                "SMH":  {"last": 540.53, "change_pct": 0.30, "change_val": 1.63, "currency": "USD", "volume": "14.342M", "shares": 1, "market_cap": "--"}
+        st.dataframe(
+            df_disp, 
+            use_container_width=True, 
+            hide_index=True,
+            column_config={
+                "ticker": "Símbolo",
+                "current_price": st.column_config.NumberColumn("Precio Actual", format="$%.2f"),
+                "quantity": st.column_config.NumberColumn("Acciones", format="%.2f"),
+                "cost_basis": st.column_config.NumberColumn("Costo Base", format="$%.2f"),
+                "market_value": st.column_config.NumberColumn("Valor Mercado", format="$%.2f"),
+                "weight": st.column_config.NumberColumn("Peso", format="%.2%"),
+                "unrealized_pl_pct": st.column_config.NumberColumn("P/L %", format="%.2f%%"),
+                "Signal": "Señal Cuantitativa"
             }
-            
-            holdings_rows = []
-            for _, row in df_pos.iterrows():
-                t = row['ticker']
-                m = market_data_ext.get(t, {"last": row['average_cost'], "change_pct": 0.0, "change_val": 0.0, "currency": "USD", "volume": "1.2M", "shares": row['quantity'], "market_cap": "100B"})
-                holdings_rows.append({
-                    "Symbol": t,
-                    "Last Price": m["last"],
-                    "Change (%)": f"+{m['change_pct']}%" if m['change_pct'] >= 0 else f"{m['change_pct']}%",
-                    "Change ($)": f"+{m['change_val']}" if m['change_val'] >= 0 else f"{m['change_val']}",
-                    "Currency": m["currency"],
-                    "Volume": m["volume"],
-                    "Shares": m["shares"],
-                    "Market Cap": m["market_cap"]
-                })
-            
-            df_holdings_ui = pd.DataFrame(holdings_rows)
-            st.dataframe(df_holdings_ui, use_container_width=True, hide_index=True)
-            
-            st.markdown("---")
-            
-            col_b1, col_b2, col_b3, col_b4 = st.columns(4)
-            
-            with col_b1:
-                st.markdown("#### Total Holdings Gain/Loss")
-                st.metric("Cost Basis", f"${total_cost_basis:,.2f}")
-                st.metric("Total Holdings", f"${total_market_value:,.2f}")
-                st.error(f"Gain/Loss: ${total_unrealized_pl:,.2f}")
-                
-            with col_b2:
-                st.markdown("#### Dividend Payouts")
-                st.metric("Total Payout", "$2.11")
-                st.caption("Jun: $2.11 | Resto meses: $0.00")
-                
-            with col_b3:
-                st.markdown("#### Asset Allocation")
-                st.progress(0.4996, text="Equities: $1,778.89 (49.96%)")
-                st.progress(0.3905, text="ETF's: $1,390.40 (39.05%)")
-                st.progress(0.1098, text="Cash: $391.00 (10.98%)")
-                
-            with col_b4:
-                st.markdown("#### Sector Allocation")
-                st.markdown("- **Technology:** $1,723.83 (48.42%)")
-                st.markdown("- **Communication Services:** $1,224.50 (34.39%)")
-                st.markdown("- **Consumer Cyclical:** $90.77 (2.55%)")
-                st.markdown("- **Consumer Defensive:** $53.12 (1.49%)")
-                
-        with sub_tab2:
-            st.markdown("### 📂 Detalle Completo de Posiciones del Portafolio")
-            st.dataframe(df_pos, use_container_width=True, hide_index=True)
-            
-        with sub_tab3:
-            st.markdown("### 🔬 Fundamentales y Tesis (Graham & Múltiplos)")
-            st.info("Módulo de auditoría de fundamentales vinculado a Supabase.")
-            
-        with sub_tab4:
-            st.markdown("### 🚀 Rendimiento Histórico")
-            st.success("Gráficos de rendimiento en tiempo real activos.")
+        )
     else:
-        st.warning("No hay posiciones registradas.")
+        st.info("No hay posiciones para mostrar.")
 
-# --- PESTAÑA 2: WATCHLIST Y VALORACIÓN ---
+with tab_reb:
+    st.subheader("🎯 Buy List & Rebalanceador")
+    st.markdown("Basado en los algoritmos de ConvictionScore, ValueScore y RiskScore.")
+    
+    if not df_enriched.empty:
+        df_buy = df_enriched[['ticker', 'ConvictionScore', 'ValueScore', 'TrendScore', 'RiskScore', 'Signal', 'weight']].copy()
+        df_buy = df_buy.sort_values(by='ConvictionScore', ascending=False)
+        
+        # Position Sizing Dinámico
+        # Asignamos el peso objetivo basado en la convicción y acotado al max_weight
+        df_buy['target_weight'] = (df_buy['ConvictionScore'] / df_buy['ConvictionScore'].sum())
+        df_buy['target_weight'] = df_buy['target_weight'].clip(upper=max_weight)
+        
+        # Re-normalizar después del clipping para que sume 1 - target_cash
+        target_invested = 1.0 - target_cash
+        current_invested = df_buy['target_weight'].sum()
+        if current_invested > 0:
+            df_buy['target_weight'] = (df_buy['target_weight'] / current_invested) * target_invested
+            
+        df_buy['weight_delta'] = df_buy['target_weight'] - df_buy['weight']
+        
+        # Determinar Acción a tomar
+        df_buy['Action'] = df_buy.apply(lambda r: "COMPRAR" if r['weight_delta'] > 0.01 else ("REDUCIR" if r['weight_delta'] < -0.01 else "MANTENER"), axis=1)
+        
+        st.dataframe(
+            df_buy[['ticker', 'ConvictionScore', 'Signal', 'weight', 'target_weight', 'weight_delta', 'Action']],
+            use_container_width=True, hide_index=True,
+            column_config={
+                "weight": st.column_config.NumberColumn("Peso Actual", format="%.2%"),
+                "target_weight": st.column_config.NumberColumn("Peso Sugerido", format="%.2%"),
+                "weight_delta": st.column_config.NumberColumn("Delta a Ajustar", format="%.2%"),
+            }
+        )
+
+with tab_esc:
+    st.subheader("🌪️ Evolución Histórica y Pruebas de Estrés")
+    colA, colB = st.columns([2, 1])
+    
+    with colA:
+        st.markdown("**Evolución del Valor del Portafolio**")
+        if not df_snap.empty:
+            st.line_chart(df_snap.set_index("date")[["total_value"]])
+        else:
+            st.info("Guarda snapshots desde la barra lateral para ver tu gráfica de evolución.")
+            
+    with colB:
+        st.markdown("**Test de Escenarios (Impacto en PNL)**")
+        if not df_enriched.empty:
+            # Calcular Beta ajustado
+            port_beta = (df_enriched['beta'] * df_enriched['weight']).sum()
+            val = portfolio_net_worth
+            
+            scenarios = [
+                {"Escenario": "Corrección Merc. (-10%)", "Impacto": -0.10 * port_beta * val},
+                {"Escenario": "Bear Market (-25%)", "Impacto": -0.25 * port_beta * val},
+                {"Escenario": "Crisis Grave (-40%)", "Impacto": -0.40 * port_beta * val},
+            ]
+            df_esc = pd.DataFrame(scenarios)
+            st.dataframe(df_esc, hide_index=True, column_config={"Impacto": st.column_config.NumberColumn(format="$%.2f")})
+
 with tab_watch:
     st.subheader("🔍 Calculadora de Margen de Seguridad")
-    st.markdown("Calcula el Valor Intrínseco ponderado (**40% Graham / 60% Múltiplos**).")
-    
     with st.form("valuation_form"):
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            eval_ticker = st.text_input("Ticker", placeholder="Ej: PLTR").upper()
-        with col2:
-            growth_est = st.number_input("Crecimiento Esperado % (g)", min_value=0.0, max_value=100.0, value=15.0, step=1.0)
-        with col3:
-            pe_target = st.number_input("P/E Objetivo", min_value=1.0, max_value=200.0, value=25.0, step=1.0)
-        with col4:
-            bond_y = st.number_input("Tasa Bonos % (Y)", min_value=1.0, max_value=10.0, value=4.4, step=0.1)
-            
-        submit_val = st.form_submit_button("Calcular Fair Value")
+        c1, c2, c3, c4 = st.columns(4)
+        eval_ticker = c1.text_input("Ticker").upper()
+        growth_est = c2.number_input("Crecimiento % (g)", value=15.0)
+        pe_target = c3.number_input("P/E Objetivo", value=25.0)
+        bond_y = c4.number_input("Tasa Bonos %", value=4.4)
+        submit_val = st.form_submit_button("Calcular")
         
     if submit_val and eval_ticker:
-        with st.spinner(f"Consultando datos fundamentales de {eval_ticker}..."):
+        with st.spinner(f"Consultando fundamentales..."):
             df_eval = fetch_live_data([eval_ticker])
-            
-            if not df_eval.empty and df_eval.iloc[0]['current_price'] > 0:
-                data = df_eval.iloc[0]
-                eps_actual = data['eps']
-                precio_actual = data['current_price']
-                
-                resultado = calculate_fair_value(
-                    eps=eps_actual, 
-                    target_pe=pe_target, 
-                    growth_rate=growth_est, 
-                    current_price=precio_actual, 
-                    bond_yield=bond_y
-                )
-                
-                st.divider()
-                st.markdown(f"### Resultados para **{eval_ticker}**")
-                
-                c1, c2, c3, c4 = st.columns(4)
-                c1.metric("Precio Actual", f"${precio_actual:,.2f}")
-                c2.metric("EPS (TTM)", f"${eps_actual:,.2f}")
-                c3.metric("Fair Value Graham", f"${resultado['fv_graham']:,.2f}")
-                c4.metric("Fair Value Múltiplos", f"${resultado['fv_multiple']:,.2f}")
-                
-                st.markdown("---")
-                rc1, rc2 = st.columns(2)
-                
-                rc1.metric(
-                    "Fair Value Final (Ponderado)", 
-                    f"${resultado['fv_final']:,.2f}",
-                    f"{(resultado['fv_final'] - precio_actual) / precio_actual * 100:,.2f}% vs Precio Actual"
-                )
-                
-                mos_pct = resultado['margin_of_safety'] * 100
-                if resultado['is_buy']:
-                    rc2.success(f"✅ Margen de Seguridad: {mos_pct:.2f}% (Superior al 30% exigido)")
-                else:
-                    if mos_pct > 0:
-                        rc2.warning(f"⚠️ Margen de Seguridad: {mos_pct:.2f}% (Insuficiente, requiere 30%)")
-                    else:
-                        rc2.error(f"❌ Sin Margen de Seguridad. Sobrevalorada en {abs(mos_pct):.2f}%")
-            else:
-                st.error("No se pudo obtener la información. Verifica que el Ticker sea correcto.")
+            if not df_eval.empty:
+                res = calculate_fair_value(df_eval.iloc[0]['eps'], pe_target, growth_est, df_eval.iloc[0]['current_price'], bond_y)
+                st.success(f"Fair Value Ponderado: **${res['fv_final']:,.2f}** | Margen de Seguridad: **{res['margin_of_safety']*100:.2f}%**")
 
-# --- PESTAÑA 3: TRANSACCIONES (BITÁCORA) ---
 with tab_tx:
     st.subheader("⚙️ Registro y Bitácora de Transacciones")
     st.markdown("Gestiona tu inventario, compra/venta de acciones y flujo de efectivo.")
@@ -345,7 +340,6 @@ with tab_tx:
                             st.error("ID no encontrado.")
 
         df_tx_display = df_tx.sort_values(by='date', ascending=False)
-        # Mostrar las columnas correctas según el esquema actual
         st.dataframe(df_tx_display[['id', 'date', 'ticker', 'action', 'quantity', 'price', 'reason']], use_container_width=True, hide_index=True)
     else:
         st.info("No hay transacciones registradas en la bitácora.")

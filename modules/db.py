@@ -54,6 +54,13 @@ class CashFlow(Base):
     amount = Column(Float, nullable=False)
     type = Column(String, nullable=False)
 
+class PortfolioSnapshot(Base):
+    __tablename__ = 'portfolio_history'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    date = Column(Date, nullable=False, unique=True)
+    total_value = Column(Float, nullable=False)
+    cash = Column(Float, nullable=False)
+    unrealized_pl = Column(Float, nullable=False)
 def init_db():
     """Crea las tablas en la base de datos activa si no existen."""
     Base.metadata.create_all(engine)

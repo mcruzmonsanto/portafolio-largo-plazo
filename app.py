@@ -191,10 +191,10 @@ with tab_dash:
             st.plotly_chart(fig, use_container_width=True)
             
             # Alertas visuales de reglas
-            if total_cash / portfolio_net_worth < MIN_CASH_TARGET:
-                st.error("⚠️ Alerta: Efectivo por debajo del 10% mínimo requerido.")
+            if total_cash / portfolio_net_worth < dynamic_min_cash:
+                st.error(f"⚠️ Alerta: Efectivo por debajo del {dynamic_min_cash*100:.1f}% mínimo sugerido por el régimen actual.")
             if total_etfs / portfolio_net_worth > MAX_ETF_WEIGHT:
-                st.warning("⚠️ Alerta: Exposición a ETFs superior al límite del 60%.")
+                st.warning(f"⚠️ Alerta: Exposición a ETFs superior al límite del {MAX_ETF_WEIGHT*100:.1f}%.")
         else:
             st.info("Portafolio vacío.")
             

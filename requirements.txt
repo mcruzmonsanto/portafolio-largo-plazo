@@ -1,0 +1,5 @@
+streamlit>=1.36.0
+pandas>=2.2.3
+yfinance>=0.2.40
+SQLAlchemy>=2.0.31
+psycopg2-binary>=2.9.9

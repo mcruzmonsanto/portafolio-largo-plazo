@@ -13,6 +13,7 @@ from modules.signal_engine import BayesianSignal
 from modules.valuation import calculate_fair_value
 from modules.scanner import AutoScanner, UNIVERSES
 from modules.risk_manager import RiskManager
+from modules.reporting import generate_tear_sheet
 from portfolio_config import MAX_STOCK_WEIGHT, MAX_ETF_WEIGHT
 
 st.set_page_config(page_title="Terminal Cuantitativo LP", page_icon="📈", layout="wide", initial_sidebar_state="collapsed")
@@ -223,6 +224,23 @@ with tab_dash:
                 },
                 height=350
             )
+
+        st.markdown("---")
+        st.subheader("📥 Reportes PDF")
+        st.markdown("Genera un Tear Sheet institucional con la vista actual de tu portafolio, reglas de riesgo, y matriz de posiciones.")
+        
+        if st.button("Generar Portfolio Tear Sheet (PDF)"):
+            with st.spinner("Compilando reporte..."):
+                try:
+                    pdf_bytes = generate_tear_sheet(df_enriched, portfolio_net_worth, total_cash, beta_val, regime, dynamic_min_cash)
+                    st.download_button(
+                        label="📄 Descargar Documento",
+                        data=pdf_bytes,
+                        file_name=f"Portfolio_Tear_Sheet_{datetime.now().strftime('%Y%m%d')}.pdf",
+                        mime="application/pdf"
+                    )
+                except Exception as e:
+                    st.error(f"Error generando PDF: {e}")
 
 with tab_watch:
     st.subheader("🎯 Radar Inteligente (Watchlist)")

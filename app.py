@@ -8,6 +8,7 @@ import plotly.graph_objects as go
 
 from modules.db import engine, Position, CashFlow, Transaction, PortfolioSnapshot, WatchlistItem
 from modules.quant_engine import fetch_quant_data, calculate_scores
+from modules.valuation import calculate_fair_value
 
 st.set_page_config(page_title="Terminal Cuantitativo LP", page_icon="📈", layout="wide", initial_sidebar_state="collapsed")
 
@@ -87,8 +88,17 @@ if not df_pos.empty:
             # Clasificación de Activos
             df_enriched['asset_type'] = df_enriched['ticker'].apply(lambda x: 'ETF' if x in KNOWN_ETFS else 'Stock')
             
-            # Margin of safety temporal
-            df_enriched['margin_of_safety'] = 0.0
+            # Cálculo REAL del Margin of Safety
+            def calc_mos(row):
+                eps = row.get('eps') or 0
+                growth = row.get('growth') or 0.05
+                price = row.get('current_price') or 0
+                if eps and eps > 0 and price > 0:
+                    val = calculate_fair_value(eps, 15, growth * 100, price)
+                    return val['margin_of_safety']
+                return -1.0
+                
+            df_enriched['margin_of_safety'] = df_enriched.apply(calc_mos, axis=1)
             
             # Scores
             scores = df_enriched.apply(lambda r: calculate_scores(r, DEFAULT_QUALITY_SCORE), axis=1)
@@ -225,6 +235,7 @@ with tab_watch:
                 import math
                 df_wq = fetch_quant_data(w_tickers)
                 if not df_wq.empty:
+                    df_wq['margin_of_safety'] = df_wq.apply(calc_mos, axis=1)
                     w_scores = df_wq.apply(lambda r: calculate_scores(r, DEFAULT_QUALITY_SCORE), axis=1)
                     w_scores_df = pd.DataFrame(list(w_scores))
                     df_wq = pd.concat([df_wq, w_scores_df], axis=1)

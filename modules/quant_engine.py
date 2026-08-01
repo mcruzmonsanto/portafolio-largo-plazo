@@ -34,13 +34,13 @@ def fetch_quant_data(tickers):
     def get_info(t):
         try:
             info = yf.Ticker(t).info
-            return t, info.get('marketCap'), info.get('targetMeanPrice')
+            return t, info.get('marketCap'), info.get('targetMeanPrice'), info.get('trailingEps'), info.get('earningsGrowth') or info.get('revenueGrowth') or 0.05
         except:
-            return t, None, None
+            return t, None, None, None, 0.05
             
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-        for t, mcap, tgt in executor.map(get_info, tickers):
-            fundamentals[t] = {'market_cap': mcap, 'target_price': tgt}
+        for t, mcap, tgt, eps, growth in executor.map(get_info, tickers):
+            fundamentals[t] = {'market_cap': mcap, 'target_price': tgt, 'eps': eps, 'growth': growth}
 
     for ticker in tickers:
         try:
@@ -98,7 +98,9 @@ def fetch_quant_data(tickers):
                 'beta': beta,
                 'atr': atr,
                 'market_cap': fund.get('market_cap'),
-                'target_price': fund.get('target_price')
+                'target_price': fund.get('target_price'),
+                'eps': fund.get('eps'),
+                'growth': fund.get('growth')
             })
         except Exception as e:
             print(f"Error procesando {ticker}: {e}")
@@ -147,16 +149,15 @@ def calculate_scores(row, quality_score_default=85):
     quality_score = quality_score_default
     
     # 5. Conviction Score (Ponderación Maestro)
-    risk_inverted = 100 - risk_score
-    conviction_score = (value_score * 0.35) + (trend_score * 0.25) + (quality_score * 0.20) + (risk_inverted * 0.20)
-    
-    # 6. Señal (Nuevo requerimiento del usuario)
-    if conviction_score >= 75:
-        signal = "COMPRA FUERTE"
-    elif conviction_score >= 60:
-        signal = "COMPRA"
-    elif conviction_score >= 45:
-        signal = "ESPERAR"
+    # 6. Señal (compuerta: el valor manda, el momentum solo afina el timing)
+    if mos < 0:
+        signal = "NO COMPRAR" # sin margen de seguridad, sin importar qué tan bueno se vea el momentum
+    elif mos >= 0.30 and trend_score >= 60:
+        signal = "COMPRA FUERTE" # barata Y con tendencia a favor
+    elif mos >= 0.30 and trend_score < 60:
+        signal = "COMPRA" # barata pero tendencia floja, entrar con cautela/escalonado
+    elif mos >= 0.10:
+        signal = "ESPERAR" # algo de descuento pero no suficiente
     else:
         signal = "NO COMPRAR"
         

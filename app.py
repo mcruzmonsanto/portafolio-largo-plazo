@@ -292,9 +292,9 @@ with tab_watch:
                         elif 'COMPRA' in val_str:
                             return 'background-color: #1a2f24; color: #2ecc71;'
                         elif 'ESPERAR' in val_str or 'Mantener' in val_str:
-                            return 'color: #95a5a6;'
+                            return 'background-color: #40320a; color: #f1c40f;'
                         elif 'NO COMPRAR' in val_str or 'tope' in val_str or 'Insuficiente' in val_str:
-                            return 'color: #e74c3c;'
+                            return 'background-color: #3b1c1c; color: #e74c3c;'
                         return ''
                         
                     styled_df = df_wq[['ticker', 'current_price', 'target_price', 'upside_pct', 'time_to_target_months', 'market_cap_billions', 'beta', 'Signal', 'ConvictionScore', 'Action_Plan', 'notes']].style.map(color_watchlist_signal, subset=['Signal', 'Action_Plan'])

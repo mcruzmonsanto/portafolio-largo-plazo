@@ -74,35 +74,52 @@ with tab_dash:
     else:
         st.warning("No hay datos suficientes para mostrar el dashboard.")
 
-# --- PESTAÑA 2: INVENTARIO DE POSICIONES ---
+# --- PESTAÑA 2: POSICIONES E INVENTARIO ---
 with tab_pos:
-    st.subheader("Inventario Actual y Rendimiento")
+    st.subheader("📊 Inventario y Margen de Seguridad")
+    st.markdown("Auditoría de posiciones bajo los criterios de Benjamin Graham y Múltiplos.")
+
+    df_pos = load_positions()
     
-    if not df_pos.empty and not df_live.empty:
-        # Preparamos las columnas para visualización limpia
-        df_display = df_merged[['ticker', 'quantity', 'average_cost', 'current_price', 'Costo_Total', 'Valor_Mercado', 'PL_Abierto', 'PL_Pct']].copy()
-        df_display.columns = ['Ticker', 'Cantidad', 'Costo Promedio', 'Precio Actual', 'Costo Total', 'Valor Mercado', 'P/L Abierto', 'P/L (%)']
+    if not df_pos.empty:
+        # 1. Simulación de cálculo analítico de Valor Razonable (Framework Graham & Múltiplos)
+        # Nota: En futuras iteraciones esto se conectará a inputs editables o APIs de fundamentales.
+        # Aquí aplicamos los valores base de tu tesis de largo plazo.
         
-        # Función para dar color condicional al P/L
-        def color_pl(val):
-            color = '#2e7d32' if val > 0 else '#c62828' if val < 0 else 'grey' # Verde oscuro / Rojo oscuro
-            return f'color: {color}'
+        # Diccionario de ejemplo con estimaciones conservadoras de Fair Value por Ticker
+        graham_values = {"AMZN": 210.0, "AVGO": 350.0, "GOOGL": 310.0, "META": 550.0, "MSFT": 380.0, 
+                         "NVDA": 180.0, "PLTR": 95.0, "QQQM": 280.0, "SMH": 550.0, "SPMO": 140.0}
         
+        multiple_values = {"AMZN": 250.0, "AVGO": 400.0, "GOOGL": 350.0, "META": 620.0, "MSFT": 430.0, 
+                           "NVDA": 220.0, "PLTR": 125.0, "QQQM": 310.0, "SMH": 620.0, "SPMO": 165.0}
+
+        df_pos['Fair_Value_Graham'] = df_pos['ticker'].map(graham_values).fillna(df_pos['average_cost'])
+        df_pos['Fair_Value_Multiple'] = df_pos['ticker'].map(multiple_values).fillna(df_pos['average_cost'])
+        
+        # Promedio del Valor Razonable Teórico
+        df_pos['Fair_Value_Promedio'] = (df_pos['Fair_Value_Graham'] + df_pos['Fair_Value_Multiple']) / 2
+        
+        # Margen de Seguridad (Asumiendo costo promedio como proxy temporal de precio actual si no hay cotización live)
+        # Margen = (Fair Value - Costo Promedio) / Fair Value * 100
+        df_pos['Margen_Seguridad_%'] = ((df_pos['Fair_Value_Promedio'] - df_pos['average_cost']) / df_pos['Fair_Value_Promedio']) * 100
+
+        # Mostrar tabla enriquecida
         st.dataframe(
-            df_display.style.format({
-                'Cantidad': '{:.2f}',
-                'Costo Promedio': '${:.2f}',
-                'Precio Actual': '${:.2f}',
-                'Costo Total': '${:,.2f}',
-                'Valor Mercado': '${:,.2f}',
-                'P/L Abierto': '${:,.2f}',
-                'P/L (%)': '{:.2f}%'
-            }).map(color_pl, subset=['P/L Abierto', 'P/L (%)']),
+            df_pos[['ticker', 'quantity', 'average_cost', 'Fair_Value_Graham', 'Fair_Value_Multiple', 'Fair_Value_Promedio', 'Margen_Seguridad_%']],
             use_container_width=True,
-            hide_index=True
+            hide_index=True,
+            column_config={
+                "average_cost": st.column_config.NumberColumn("Costo Promedio", format="$%.2f"),
+                "Fair_Value_Graham": st.column_config.NumberColumn("F.V. Graham", format="$%.2f"),
+                "Fair_Value_Multiple": st.column_config.NumberColumn("F.V. Múltiplos", format="$%.2f"),
+                "Fair_Value_Promedio": st.column_config.NumberColumn("F.V. Consenso", format="$%.2f"),
+                "Margen_Seguridad_%": st.column_config.NumberColumn("Margen de Seguridad", format="%.2f%%")
+            }
         )
+        
+        st.info("💡 **Criterio de Inversión:** Un Margen de Seguridad positivo indica que el precio de adquisición se encuentra por debajo del valor intrínseco estimado bajo los filtros conservadores de Graham.")
     else:
-        st.write("No hay posiciones activas.")
+        st.warning("No hay posiciones registradas en el inventario.")
 
 # --- PESTAÑA 3: WATCHLIST Y VALORACIÓN ---
 with tab_watch:

@@ -334,7 +334,9 @@ with tab_watch:
                             return 'background-color: #40320a; color: #f1c40f;'
                         return ''
                         
-                    styled_df = df_wq[['ticker', 'current_price', 'target_price', 'upside_pct', 'time_to_target_months', 'market_cap_billions', 'beta', 'Signal', 'prob_success', 'kelly_fraction', 'Action_Plan', 'notes']].style.map(color_watchlist_signal, subset=['Signal', 'Action_Plan'])
+                    df_wq['kelly_fraction_pct'] = df_wq['kelly_fraction'] * 100
+                    
+                    styled_df = df_wq[['ticker', 'current_price', 'target_price', 'upside_pct', 'time_to_target_months', 'market_cap_billions', 'beta', 'Signal', 'prob_success', 'kelly_fraction_pct', 'Action_Plan', 'notes']].style.map(color_watchlist_signal, subset=['Signal', 'Action_Plan'])
                     
                     st.dataframe(
                         styled_df,
@@ -347,7 +349,7 @@ with tab_watch:
                             "market_cap_billions": st.column_config.NumberColumn("Market Cap (Billones)", format="$%.2f B"),
                             "beta": st.column_config.NumberColumn("Beta", format="%.2f"),
                             "prob_success": st.column_config.NumberColumn("Prob. Éxito", format="%.2f"),
-                            "kelly_fraction": st.column_config.NumberColumn("Kelly Target", format="%.2%"),
+                            "kelly_fraction_pct": st.column_config.NumberColumn("Kelly Target", format="%.2f%%"),
                             "Action_Plan": "Plan de Acción Sugerido",
                             "notes": "Tesis"
                         }
@@ -382,7 +384,8 @@ with tab_scan:
                             if 'FUERTE' in str(val): return 'background-color: #1e3d2f; color: #2ecc71; font-weight: bold;'
                             return 'background-color: #1a2f24; color: #2ecc71;'
                             
-                        styled_opps = df_opps[['ticker', 'current_price', 'composite_z', 'prob_success', 'kelly_fraction', 'Signal']].style.map(color_scanner_signal, subset=['Signal'])
+                        df_opps['kelly_fraction_pct'] = df_opps['kelly_fraction'] * 100
+                        styled_opps = df_opps[['ticker', 'current_price', 'composite_z', 'prob_success', 'kelly_fraction_pct', 'Signal']].style.map(color_scanner_signal, subset=['Signal'])
                         
                         st.dataframe(
                             styled_opps,
@@ -391,7 +394,7 @@ with tab_scan:
                                 "current_price": st.column_config.NumberColumn("Precio", format="$%.2f"),
                                 "composite_z": st.column_config.NumberColumn("Z-Score", format="%.2f"),
                                 "prob_success": st.column_config.NumberColumn("Prob. Éxito", format="%.2f"),
-                                "kelly_fraction": st.column_config.NumberColumn("Kelly Target", format="%.2%"),
+                                "kelly_fraction_pct": st.column_config.NumberColumn("Kelly Target", format="%.2f%%"),
                             }
                         )
                         
@@ -422,13 +425,18 @@ with tab_reb:
         df_buy['weight_delta'] = df_buy['target_weight'] - df_buy['weight']
         df_buy['Action'] = df_buy.apply(lambda r: "COMPRAR" if r['weight_delta'] > 0.01 else ("REDUCIR" if r['weight_delta'] < -0.01 else "MANTENER"), axis=1)
         
+        df_buy_disp = df_buy[['ticker', 'Signal', 'weight', 'target_weight', 'weight_delta', 'Action']].copy()
+        df_buy_disp['weight'] = df_buy_disp['weight'] * 100
+        df_buy_disp['target_weight'] = df_buy_disp['target_weight'] * 100
+        df_buy_disp['weight_delta'] = df_buy_disp['weight_delta'] * 100
+        
         st.dataframe(
-            df_buy[['ticker', 'Signal', 'weight', 'target_weight', 'weight_delta', 'Action']],
+            df_buy_disp,
             use_container_width=True, hide_index=True,
             column_config={
-                "weight": st.column_config.NumberColumn("Peso Actual", format="%.2%"),
-                "target_weight": st.column_config.NumberColumn("Peso Objetivo", format="%.2%"),
-                "weight_delta": st.column_config.NumberColumn("Desviación", format="%.2%"),
+                "weight": st.column_config.NumberColumn("Peso Actual", format="%.2f%%"),
+                "target_weight": st.column_config.NumberColumn("Peso Objetivo", format="%.2f%%"),
+                "weight_delta": st.column_config.NumberColumn("Desviación", format="%.2f%%"),
             }
         )
 

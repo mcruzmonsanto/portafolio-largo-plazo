@@ -213,7 +213,7 @@ with tab_dash:
     with col_chart2:
         st.subheader("Inventario Consolidado")
         if not df_enriched.empty:
-            disp_cols = ['ticker', 'current_price', 'market_value', 'weight', 'unrealized_pl_pct', 'prob_success', 'Signal']
+            disp_cols = ['ticker', 'quality', 'current_price', 'market_value', 'weight', 'unrealized_pl_pct', 'prob_success', 'Signal']
             
             def color_signal(val):
                 color = 'green' if 'COMPRA' in str(val) else 'red' if 'NO COMPRAR' in str(val) else 'gray'
@@ -230,6 +230,7 @@ with tab_dash:
                     "weight": st.column_config.ProgressColumn("Peso %", format="%.2f", min_value=0, max_value=MAX_STOCK_WEIGHT*1.5),
                     "unrealized_pl_pct": st.column_config.NumberColumn("Retorno %", format="%.2f%%"),
                     "prob_success": st.column_config.NumberColumn("Prob. Éxito", format="%.2f"),
+                    "quality": "Calidad (yf)",
                     "Signal": "Señal"
                 },
                 height=350
@@ -365,7 +366,7 @@ with tab_watch:
                         
                     df_wq['kelly_fraction_pct'] = df_wq['kelly_fraction'] * 100
                     
-                    styled_df = df_wq[['ticker', 'current_price', 'target_price', 'upside_pct', 'time_to_target_months', 'market_cap_billions', 'beta', 'Signal', 'prob_success', 'kelly_fraction_pct', 'Action_Plan', 'notes']].style.map(color_watchlist_signal, subset=['Signal', 'Action_Plan'])
+                    styled_df = df_wq[['ticker', 'quality', 'current_price', 'target_price', 'upside_pct', 'time_to_target_months', 'market_cap_billions', 'beta', 'Signal', 'prob_success', 'kelly_fraction_pct', 'Action_Plan', 'notes']].style.map(color_watchlist_signal, subset=['Signal', 'Action_Plan'])
                     
                     st.dataframe(
                         styled_df,
@@ -377,6 +378,7 @@ with tab_watch:
                             "time_to_target_months": st.column_config.NumberColumn("Tiempo Est. (Meses)", format="%.1f M"),
                             "market_cap_billions": st.column_config.NumberColumn("Market Cap (Billones)", format="$%.2f B"),
                             "beta": st.column_config.NumberColumn("Beta", format="%.2f"),
+                            "quality": "Calidad",
                             "prob_success": st.column_config.NumberColumn("Prob. Éxito", format="%.2f"),
                             "kelly_fraction_pct": st.column_config.NumberColumn("Kelly Target", format="%.2f%%"),
                             "Action_Plan": "Plan de Acción Sugerido",

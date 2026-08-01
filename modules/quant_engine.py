@@ -4,6 +4,7 @@ import numpy as np
 import concurrent.futures
 from modules.data_ingestion import DataProvider
 from modules.scoring_engine import CompositeScorer
+from modules.data_quality import DataQualityMonitor
 import warnings
 
 def fetch_quant_data(tickers):
@@ -37,21 +38,28 @@ def fetch_quant_data(tickers):
     
     # Descarga rápida de fundamentales (Market Cap, Target Price)
     fundamentals = {}
+    quality_monitor = DataQualityMonitor()
+    now = pd.Timestamp.now()
+    
     def get_info(t):
         try:
             quote = provider.get_quote(t)
-            return t, quote.market_cap, quote.target_price, quote.eps, \
-                   quote.growth, quote.roe, quote.op_margin, quote.debt_equity
+            # Evaluar calidad (ej. EPS que suele ser crítico)
+            eps_dp = quality_monitor.assess(t, 'eps', quote.eps, now)
+            badge = quality_monitor.render_quality_badge(eps_dp)
+            
+            return t, quote.market_cap, quote.target_price, eps_dp.value, \
+                   quote.growth, quote.roe, quote.op_margin, quote.debt_equity, badge
         except Exception as e:
-            return t, None, None, None, 0.05, None, None, None
+            return t, None, None, None, 0.05, None, None, None, "⚫ yfinance"
             
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-        for t, mcap, tgt, eps, growth, roe, op_margin, debt_eq in executor.map(get_info, tickers):
+        for t, mcap, tgt, eps, growth, roe, op_margin, debt_eq, badge in executor.map(get_info, tickers):
             growth_clamped = max(-0.10, min(growth, 0.30)) if growth is not None else 0.05
             fundamentals[t] = {
                 'market_cap': mcap, 'target_price': tgt, 'eps': eps, 
                 'growth': growth_clamped, 'roe': roe, 'op_margin': op_margin, 
-                'debt_equity': debt_eq
+                'debt_equity': debt_eq, 'quality_badge': badge
             }
 
     for ticker in tickers:
@@ -115,7 +123,8 @@ def fetch_quant_data(tickers):
                 'growth': fund.get('growth'),
                 'roe': fund.get('roe'),
                 'op_margin': fund.get('op_margin'),
-                'debt_equity': fund.get('debt_equity')
+                'debt_equity': fund.get('debt_equity'),
+                'quality': fund.get('quality_badge', '⚫ yfinance')
             })
         except Exception as e:
             print(f"Error procesando {ticker}: {e}")

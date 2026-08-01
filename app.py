@@ -321,7 +321,7 @@ with tab_ops:
         df_tx = df_tx.sort_values(by='date', ascending=False)
         
         # Formateo dinámico para manejar nulos en las columnas de opciones
-        df_tx_display = df_tx[['id', 'date', 'instrument', 'action', 'ticker', 'quantity', 'price', 'strategy', 'strike']].copy()
+        df_tx_display = df_tx[['id', 'date', 'ticker', 'action', 'quantity', 'price', 'reason']].copy()
         
         st.dataframe(
             df_tx_display,

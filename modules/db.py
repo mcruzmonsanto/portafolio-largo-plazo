@@ -61,6 +61,13 @@ class PortfolioSnapshot(Base):
     total_value = Column(Float, nullable=False)
     cash = Column(Float, nullable=False)
     unrealized_pl = Column(Float, nullable=False)
+
+class WatchlistItem(Base):
+    __tablename__ = 'watchlist'
+    ticker = Column(String, primary_key=True)
+    added_date = Column(Date, nullable=False)
+    notes = Column(String, nullable=True)
+
 def init_db():
     """Crea las tablas en la base de datos activa si no existen."""
     Base.metadata.create_all(engine)

@@ -1,26 +1,31 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 from datetime import date
 from sqlalchemy.orm import Session
-from modules.db import engine, Position, CashFlow, Transaction, PortfolioSnapshot
-from modules.market_data import fetch_live_data
-from modules.valuation import calculate_fair_value
+import plotly.express as px
+import plotly.graph_objects as go
+
+from modules.db import engine, Position, CashFlow, Transaction, PortfolioSnapshot, WatchlistItem
 from modules.quant_engine import fetch_quant_data, calculate_scores
 
-st.set_page_config(page_title="Terminal Cuantitativo LP", page_icon="📈", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Terminal Cuantitativo LP", page_icon="📈", layout="wide", initial_sidebar_state="collapsed")
 
-# --- BARRA LATERAL (CONFIGURACIÓN INSTITUCIONAL) ---
+# --- REGLAS DURAS DEL PORTAFOLIO (INSTITUCIONALES) ---
+MAX_STOCK_WEIGHT = 0.10
+MAX_ETF_WEIGHT = 0.60
+MIN_CASH_TARGET = 0.10
+DEFAULT_QUALITY_SCORE = 85
+KNOWN_ETFS = ['SPY', 'VOO', 'QQQ', 'QQQM', 'SMH', 'SPMO', 'DIA', 'IWM', 'VTI', 'VT']
+
+# --- BARRA LATERAL ---
 with st.sidebar:
-    st.header("⚙️ Parámetros de Riesgo")
-    max_weight = st.slider("Peso Máximo por Posición", 5, 30, 15, format="%d%%") / 100
-    target_cash = st.slider("Efectivo Objetivo", 0, 30, 10, format="%d%%") / 100
-    default_pe = st.number_input("PE Objetivo Global", value=25)
-    default_quality = st.slider("Quality Score Pordefecto", 0, 100, 85)
-    
+    st.header("🛡️ Reglas de Riesgo Activas")
+    st.info(f"🔹 Máx. por Acción: {MAX_STOCK_WEIGHT*100}%\n\n🔹 Máx. Total ETFs: {MAX_ETF_WEIGHT*100}%\n\n🔹 Efectivo Mínimo: {MIN_CASH_TARGET*100}%")
     st.markdown("---")
     st.info("📸 El Snapshot histórico se guarda automáticamente una vez al día.")
 
-# --- CARGA DE DATOS DESDE BASE DE DATOS ---
+# --- CARGA DE DATOS ---
 @st.cache_data(ttl=60)
 def load_positions():
     with engine.connect() as conn:
@@ -41,6 +46,11 @@ def load_snapshots():
     with engine.connect() as conn:
         return pd.read_sql("SELECT * FROM portfolio_history ORDER BY date ASC", conn)
 
+@st.cache_data(ttl=60)
+def load_watchlist():
+    with engine.connect() as conn:
+        return pd.read_sql("SELECT * FROM watchlist", conn)
+
 st.title("🏛️ Terminal Cuantitativo Institucional")
 st.markdown("---")
 
@@ -48,8 +58,9 @@ df_pos = load_positions()
 df_cash = load_cash_flows()
 df_tx = load_transactions()
 df_snap = load_snapshots()
+df_watch = load_watchlist()
 
-# Cálculo de Liquidez
+# --- CÁLCULO DE LIQUIDEZ Y VALORACIÓN BÁSICA ---
 cash_deposits = df_cash['amount'].sum() if not df_cash.empty else 0.0
 total_cost_basis = (df_pos['quantity'] * df_pos['average_cost']).sum() if not df_pos.empty else 0.0
 total_cash = cash_deposits - total_cost_basis
@@ -57,35 +68,30 @@ total_cash = cash_deposits - total_cost_basis
 total_market_value = 0.0
 total_unrealized_pl = 0.0
 portfolio_net_worth = total_cash
-
 df_enriched = pd.DataFrame()
 
 if not df_pos.empty:
-    with st.spinner("Descargando data de mercado y calculando métricas (yfinance)..."):
+    with st.spinner("Sincronizando mercado y cuantificando riesgo..."):
         tickers = df_pos['ticker'].tolist()
         df_quant = fetch_quant_data(tickers)
         
         if not df_quant.empty:
-            # Unir datos
             df_enriched = pd.merge(df_pos, df_quant, on='ticker', how='left')
-            
-            # Si un ticker no descargó precio, usamos su costo promedio
             df_enriched['current_price'] = df_enriched['current_price'].fillna(df_enriched['average_cost'])
             
-            # Cálculos financieros base
             df_enriched['market_value'] = df_enriched['quantity'] * df_enriched['current_price']
             df_enriched['cost_basis'] = df_enriched['quantity'] * df_enriched['average_cost']
             df_enriched['unrealized_pl'] = df_enriched['market_value'] - df_enriched['cost_basis']
             df_enriched['unrealized_pl_pct'] = (df_enriched['unrealized_pl'] / df_enriched['cost_basis']) * 100
             
-            # Calcular margin_of_safety heurístico (si tenemos fv graham guardado)
-            df_enriched['margin_of_safety'] = 0.0
-            for idx, row in df_enriched.iterrows():
-                if pd.notna(row['fair_value_graham']) and row['fair_value_graham'] > 0:
-                    df_enriched.at[idx, 'margin_of_safety'] = (row['fair_value_graham'] - row['current_price']) / row['current_price']
+            # Clasificación de Activos
+            df_enriched['asset_type'] = df_enriched['ticker'].apply(lambda x: 'ETF' if x in KNOWN_ETFS else 'Stock')
             
-            # Ejecutar motor de scoring por fila
-            scores = df_enriched.apply(lambda r: calculate_scores(r, default_quality), axis=1)
+            # Margin of safety temporal
+            df_enriched['margin_of_safety'] = 0.0
+            
+            # Scores
+            scores = df_enriched.apply(lambda r: calculate_scores(r, DEFAULT_QUALITY_SCORE), axis=1)
             scores_df = pd.DataFrame(list(scores))
             df_enriched = pd.concat([df_enriched, scores_df], axis=1)
             
@@ -101,7 +107,6 @@ try:
         today = date.today()
         exist = session.query(PortfolioSnapshot).filter_by(date=today).first()
         if not exist and portfolio_net_worth > 0:
-            # Casteamos a float() puro de Python para evitar el bug de np.float64 en psycopg2
             snap = PortfolioSnapshot(
                 date=today, 
                 total_value=float(portfolio_net_worth), 
@@ -111,128 +116,220 @@ try:
             session.add(snap)
             session.commit()
 except Exception as e:
-    pass # Si falla (ej: sin conexión momentánea), simplemente lo ignora para no crashear la UI
+    pass 
 
-
-# Tarjetas Métricas
-col1, col2, col3, col4, col5 = st.columns(5)
-col1.metric("Valor del Portafolio", f"${portfolio_net_worth:,.2f}")
-col2.metric("Efectivo", f"${total_cash:,.2f}")
-col3.metric("Inv. Activa", f"${total_cost_basis:,.2f}")
-col4.metric("P/L Abierto", f"${total_unrealized_pl:,.2f}", delta=f"{(total_unrealized_pl/total_cost_basis*100):.2f}%" if total_cost_basis > 0 else "0.00%")
-col5.metric("Riesgo Beta", f"{(df_enriched['beta'] * df_enriched['weight']).sum():.2f}" if not df_enriched.empty else "0.0")
+# --- DASHBOARD DE MÉTRICAS VISUALES ---
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("Net Worth", f"${portfolio_net_worth:,.2f}")
+c2.metric("Liquidez (Cash)", f"${total_cash:,.2f}", delta=f"{(total_cash/portfolio_net_worth)*100:.1f}% del total" if portfolio_net_worth>0 else "")
+c3.metric("P/L Abierto", f"${total_unrealized_pl:,.2f}", delta=f"{(total_unrealized_pl/total_cost_basis*100):.2f}%" if total_cost_basis > 0 else "0.00%")
+beta_val = (df_enriched['beta'] * df_enriched['weight']).sum() if not df_enriched.empty else 0.0
+c4.metric("Riesgo Beta Portafolio", f"{beta_val:.2f}", delta="Mercado = 1.0", delta_color="off")
 
 st.markdown("---")
 
-tab_dash, tab_reb, tab_esc, tab_watch, tab_tx = st.tabs([
-    "📊 Holdings", "🎯 Señales & Rebalanceo", "🌪️ Evolución & Riesgo", "🔍 Watchlist", "⚙️ Bitácora"
+tab_dash, tab_watch, tab_reb, tab_esc, tab_tx = st.tabs([
+    "📊 Resumen Visual", "🎯 Radar Watchlist", "⚖️ Rebalanceador", "🌪️ Riesgo Histórico", "⚙️ Bitácora"
 ])
 
 with tab_dash:
-    st.subheader("📊 Inventario y Métricas Institucionales")
-    if not df_enriched.empty:
-        disp_cols = ['ticker', 'current_price', 'quantity', 'cost_basis', 'market_value', 'weight', 'unrealized_pl_pct', 'Signal']
-        df_disp = df_enriched[disp_cols].copy()
-        
-        st.dataframe(
-            df_disp, 
-            use_container_width=True, 
-            hide_index=True,
-            column_config={
-                "ticker": "Símbolo",
-                "current_price": st.column_config.NumberColumn("Precio Actual", format="$%.2f"),
-                "quantity": st.column_config.NumberColumn("Acciones", format="%.2f"),
-                "cost_basis": st.column_config.NumberColumn("Costo Base", format="$%.2f"),
-                "market_value": st.column_config.NumberColumn("Valor Mercado", format="$%.2f"),
-                "weight": st.column_config.NumberColumn("Peso", format="%.2%"),
-                "unrealized_pl_pct": st.column_config.NumberColumn("P/L %", format="%.2f%%"),
-                "Signal": "Señal Cuantitativa"
-            }
-        )
-    else:
-        st.info("No hay posiciones para mostrar.")
+    col_chart1, col_chart2 = st.columns([1, 2])
+    
+    with col_chart1:
+        st.subheader("Asset Allocation")
+        if portfolio_net_worth > 0:
+            total_stocks = df_enriched[df_enriched['asset_type'] == 'Stock']['market_value'].sum() if not df_enriched.empty else 0
+            total_etfs = df_enriched[df_enriched['asset_type'] == 'ETF']['market_value'].sum() if not df_enriched.empty else 0
+            
+            fig = px.pie(
+                names=['Efectivo', 'Acciones Individuales', 'ETFs'],
+                values=[total_cash, total_stocks, total_etfs],
+                hole=0.4,
+                color_discrete_sequence=['#2ecc71', '#3498db', '#9b59b6']
+            )
+            fig.update_layout(margin=dict(t=30, b=0, l=0, r=0), height=300, showlegend=True)
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Alertas visuales de reglas
+            if total_cash / portfolio_net_worth < MIN_CASH_TARGET:
+                st.error("⚠️ Alerta: Efectivo por debajo del 10% mínimo requerido.")
+            if total_etfs / portfolio_net_worth > MAX_ETF_WEIGHT:
+                st.warning("⚠️ Alerta: Exposición a ETFs superior al límite del 60%.")
+        else:
+            st.info("Portafolio vacío.")
+            
+    with col_chart2:
+        st.subheader("Inventario Consolidado")
+        if not df_enriched.empty:
+            disp_cols = ['ticker', 'current_price', 'market_value', 'weight', 'unrealized_pl_pct', 'ConvictionScore', 'Signal']
+            
+            def color_signal(val):
+                color = 'green' if 'BUY' in str(val) else 'red' if 'REDUCE' in str(val) or 'AVOID' in str(val) else 'gray'
+                return f'color: {color}; font-weight: bold;'
+
+            st.dataframe(
+                df_enriched[disp_cols].style.map(color_signal, subset=['Signal']),
+                use_container_width=True, 
+                hide_index=True,
+                column_config={
+                    "ticker": "Ticker",
+                    "current_price": st.column_config.NumberColumn("Precio", format="$%.2f"),
+                    "market_value": st.column_config.NumberColumn("Valor Mercado", format="$%.2f"),
+                    "weight": st.column_config.ProgressColumn("Peso %", format="%.2f", min_value=0, max_value=MAX_STOCK_WEIGHT*1.5),
+                    "unrealized_pl_pct": st.column_config.NumberColumn("Retorno %", format="%.2f%%"),
+                    "ConvictionScore": st.column_config.NumberColumn("Score"),
+                    "Signal": "Señal"
+                },
+                height=350
+            )
+
+with tab_watch:
+    st.subheader("🎯 Radar Inteligente (Watchlist)")
+    st.markdown("Monitorea oportunidades y calcula la entrada perfecta de acuerdo a tus límites de riesgo.")
+    
+    col_w1, col_w2 = st.columns([1, 4])
+    with col_w1:
+        with st.form("add_watch_form"):
+            new_wticker = st.text_input("Agregar Ticker").upper()
+            w_notes = st.text_input("Tesis breve")
+            submitted_w = st.form_submit_button("Vigilar")
+            
+            if submitted_w and new_wticker:
+                try:
+                    with Session(engine) as session:
+                        if not session.query(WatchlistItem).filter_by(ticker=new_wticker).first():
+                            session.add(WatchlistItem(ticker=new_wticker, added_date=date.today(), notes=w_notes))
+                            session.commit()
+                            st.success(f"{new_wticker} agregado.")
+                            st.rerun()
+                except Exception as e:
+                    st.error("Error agregando a watchlist.")
+                    
+        with st.form("del_watch_form"):
+            del_wticker = st.selectbox("Eliminar Ticker", df_watch['ticker'].tolist() if not df_watch.empty else ["Vacío"])
+            del_w = st.form_submit_button("Quitar del Radar")
+            if del_w and del_wticker != "Vacío":
+                with Session(engine) as session:
+                    wt = session.query(WatchlistItem).filter_by(ticker=del_wticker).first()
+                    if wt:
+                        session.delete(wt)
+                        session.commit()
+                        st.rerun()
+
+    with col_w2:
+        if not df_watch.empty:
+            w_tickers = df_watch['ticker'].tolist()
+            with st.spinner("Analizando Radar..."):
+                df_wq = fetch_quant_data(w_tickers)
+                if not df_wq.empty:
+                    w_scores = df_wq.apply(lambda r: calculate_scores(r, DEFAULT_QUALITY_SCORE), axis=1)
+                    w_scores_df = pd.DataFrame(list(w_scores))
+                    df_wq = pd.concat([df_wq, w_scores_df], axis=1)
+                    
+                    # Merge con notas de watchlist
+                    df_wq = pd.merge(df_wq, df_watch, on='ticker', how='left')
+                    
+                    # Lógica de "Sugerencia de Compra"
+                    def get_buy_suggestion(row):
+                        if row['Signal'] not in ['STRONG BUY', 'BUY']:
+                            return "Mantenerse al margen"
+                            
+                        # Limite según tipo de activo
+                        max_w = MAX_ETF_WEIGHT if row['ticker'] in KNOWN_ETFS else MAX_STOCK_WEIGHT
+                        
+                        # ¿Cuánto de este activo ya tenemos?
+                        current_w = 0.0
+                        if not df_enriched.empty and row['ticker'] in df_enriched['ticker'].values:
+                            current_w = df_enriched[df_enriched['ticker'] == row['ticker']]['weight'].values[0]
+                            
+                        space_left_pct = max_w - current_w
+                        if space_left_pct <= 0:
+                            return "Posición al tope (Regla Riesgo)"
+                            
+                        # Efectivo disponible por encima del target mínimo
+                        available_cash = total_cash - (portfolio_net_worth * MIN_CASH_TARGET)
+                        if available_cash <= 0:
+                            return "No hay efectivo libre"
+                            
+                        max_usd_alloc = portfolio_net_worth * space_left_pct
+                        invest_usd = min(max_usd_alloc, available_cash)
+                        shares_to_buy = invest_usd / row['current_price']
+                        
+                        return f"Comprar {shares_to_buy:.2f} accs (~${invest_usd:,.0f})"
+                        
+                    df_wq['Action_Plan'] = df_wq.apply(get_buy_suggestion, axis=1)
+                    
+                    st.dataframe(
+                        df_wq[['ticker', 'current_price', 'Signal', 'ConvictionScore', 'RiskScore', 'Action_Plan', 'notes']],
+                        use_container_width=True, hide_index=True,
+                        column_config={
+                            "current_price": st.column_config.NumberColumn("Precio", format="$%.2f"),
+                            "Action_Plan": "Plan de Acción Sugerido",
+                            "notes": "Tesis"
+                        }
+                    )
+        else:
+            st.info("El Radar está vacío. Agrega acciones a la izquierda para que el sistema las evalúe.")
 
 with tab_reb:
-    st.subheader("🎯 Buy List & Rebalanceador")
-    st.markdown("Basado en los algoritmos de ConvictionScore, ValueScore y RiskScore.")
-    
+    st.subheader("⚖️ Rebalanceo de Portafolio Existente")
     if not df_enriched.empty:
-        df_buy = df_enriched[['ticker', 'ConvictionScore', 'ValueScore', 'TrendScore', 'RiskScore', 'Signal', 'weight']].copy()
-        df_buy = df_buy.sort_values(by='ConvictionScore', ascending=False)
+        df_buy = df_enriched[['ticker', 'asset_type', 'ConvictionScore', 'Signal', 'weight', 'market_value']].copy()
         
-        # Position Sizing Dinámico
-        # Asignamos el peso objetivo basado en la convicción y acotado al max_weight
-        df_buy['target_weight'] = (df_buy['ConvictionScore'] / df_buy['ConvictionScore'].sum())
-        df_buy['target_weight'] = df_buy['target_weight'].clip(upper=max_weight)
+        def calc_target(row):
+            limit = MAX_ETF_WEIGHT if row['asset_type'] == 'ETF' else MAX_STOCK_WEIGHT
+            # En un algoritmo completo, aquí se distribuiría el peso por convicción.
+            # Por simplicidad, tomamos el mínimo entre el límite de riesgo y un target proporcional simple.
+            base_target = row['ConvictionScore'] / 100.0 * limit
+            return min(base_target, limit)
+            
+        df_buy['target_weight'] = df_buy.apply(calc_target, axis=1)
         
-        # Re-normalizar después del clipping para que sume 1 - target_cash
-        target_invested = 1.0 - target_cash
-        current_invested = df_buy['target_weight'].sum()
-        if current_invested > 0:
-            df_buy['target_weight'] = (df_buy['target_weight'] / current_invested) * target_invested
+        # Ajuste global para respetar el cash
+        total_target = df_buy['target_weight'].sum()
+        max_investable = 1.0 - MIN_CASH_TARGET
+        if total_target > max_investable and total_target > 0:
+            df_buy['target_weight'] = (df_buy['target_weight'] / total_target) * max_investable
             
         df_buy['weight_delta'] = df_buy['target_weight'] - df_buy['weight']
-        
-        # Determinar Acción a tomar
         df_buy['Action'] = df_buy.apply(lambda r: "COMPRAR" if r['weight_delta'] > 0.01 else ("REDUCIR" if r['weight_delta'] < -0.01 else "MANTENER"), axis=1)
         
         st.dataframe(
-            df_buy[['ticker', 'ConvictionScore', 'Signal', 'weight', 'target_weight', 'weight_delta', 'Action']],
+            df_buy[['ticker', 'Signal', 'weight', 'target_weight', 'weight_delta', 'Action']],
             use_container_width=True, hide_index=True,
             column_config={
                 "weight": st.column_config.NumberColumn("Peso Actual", format="%.2%"),
-                "target_weight": st.column_config.NumberColumn("Peso Sugerido", format="%.2%"),
-                "weight_delta": st.column_config.NumberColumn("Delta a Ajustar", format="%.2%"),
+                "target_weight": st.column_config.NumberColumn("Peso Objetivo", format="%.2%"),
+                "weight_delta": st.column_config.NumberColumn("Desviación", format="%.2%"),
             }
         )
 
 with tab_esc:
-    st.subheader("🌪️ Evolución Histórica y Pruebas de Estrés")
+    st.subheader("🌪️ Evolución y Riesgo")
     colA, colB = st.columns([2, 1])
     
     with colA:
-        st.markdown("**Evolución del Valor del Portafolio**")
         if not df_snap.empty:
-            st.line_chart(df_snap.set_index("date")[["total_value"]])
+            fig_hist = px.area(df_snap, x='date', y='total_value', title='Crecimiento de Capital (Net Worth)')
+            fig_hist.update_layout(margin=dict(t=30, b=0, l=0, r=0), height=300)
+            st.plotly_chart(fig_hist, use_container_width=True)
         else:
-            st.info("Guarda snapshots desde la barra lateral para ver tu gráfica de evolución.")
+            st.info("Sin histórico suficiente.")
             
     with colB:
-        st.markdown("**Test de Escenarios (Impacto en PNL)**")
+        st.markdown("**Test de Estrés (Impacto en USD)**")
         if not df_enriched.empty:
-            # Calcular Beta ajustado
-            port_beta = (df_enriched['beta'] * df_enriched['weight']).sum()
             val = portfolio_net_worth
-            
             scenarios = [
-                {"Escenario": "Corrección Merc. (-10%)", "Impacto": -0.10 * port_beta * val},
-                {"Escenario": "Bear Market (-25%)", "Impacto": -0.25 * port_beta * val},
-                {"Escenario": "Crisis Grave (-40%)", "Impacto": -0.40 * port_beta * val},
+                {"Escenario": "Corrección Merc. (-10%)", "Impacto": -0.10 * beta_val * val},
+                {"Escenario": "Bear Market (-25%)", "Impacto": -0.25 * beta_val * val},
+                {"Escenario": "Crisis Grave (-40%)", "Impacto": -0.40 * beta_val * val},
             ]
             df_esc = pd.DataFrame(scenarios)
-            st.dataframe(df_esc, hide_index=True, column_config={"Impacto": st.column_config.NumberColumn(format="$%.2f")})
-
-with tab_watch:
-    st.subheader("🔍 Calculadora de Margen de Seguridad")
-    with st.form("valuation_form"):
-        c1, c2, c3, c4 = st.columns(4)
-        eval_ticker = c1.text_input("Ticker").upper()
-        growth_est = c2.number_input("Crecimiento % (g)", value=15.0)
-        pe_target = c3.number_input("P/E Objetivo", value=25.0)
-        bond_y = c4.number_input("Tasa Bonos %", value=4.4)
-        submit_val = st.form_submit_button("Calcular")
-        
-    if submit_val and eval_ticker:
-        with st.spinner(f"Consultando fundamentales..."):
-            df_eval = fetch_live_data([eval_ticker])
-            if not df_eval.empty:
-                res = calculate_fair_value(df_eval.iloc[0]['eps'], pe_target, growth_est, df_eval.iloc[0]['current_price'], bond_y)
-                st.success(f"Fair Value Ponderado: **${res['fv_final']:,.2f}** | Margen de Seguridad: **{res['margin_of_safety']*100:.2f}%**")
+            st.dataframe(df_esc, hide_index=True, column_config={"Impacto": st.column_config.NumberColumn(format="-$%.2f")})
 
 with tab_tx:
     st.subheader("⚙️ Registro y Bitácora de Transacciones")
-    st.markdown("Gestiona tu inventario, compra/venta de acciones y flujo de efectivo.")
-
     if "op_msg" in st.session_state:
         st.success(st.session_state["op_msg"])
         del st.session_state["op_msg"]
@@ -250,21 +347,19 @@ with tab_tx:
                 op_action = st.selectbox("Movimiento", ["DEPOSIT", "WITHDRAW", "DIVIDEND"])
             with col2:
                 op_price = st.number_input("Monto (USD)", min_value=0.01, step=1.0, format="%.2f")
-                op_reason = st.text_input("Nota (Ej: 'Dividendo AVGO' o 'Aporte mensual')")
-            
+                op_reason = st.text_input("Nota")
             op_ticker = "Efectivo"
             op_qty = 1.0
-
-        else: # Acción
+        else:
             col1, col2, col3 = st.columns(3)
             with col1:
                 op_date = st.date_input("Fecha")
                 op_action = st.selectbox("Operación", ["BUY", "SELL"])
             with col2:
-                op_ticker = st.text_input("Ticker", placeholder="Ej: META").upper()
-                op_qty = st.number_input("Cantidad", min_value=0.01, step=0.01, format="%.2f")
+                op_ticker = st.text_input("Ticker").upper()
+                op_qty = st.number_input("Cantidad", min_value=0.01, format="%.2f")
             with col3:
-                op_price = st.number_input("Precio por Acción (USD)", min_value=0.01, step=0.01, format="%.2f")
+                op_price = st.number_input("Precio por Acción (USD)", min_value=0.01, format="%.2f")
                 op_reason = st.text_input("Motivo")
 
         submit_op = st.form_submit_button("Registrar Transacción")
@@ -273,17 +368,10 @@ with tab_tx:
         try:
             with Session(engine) as session:
                 if instrumento != "Efectivo" and not op_ticker:
-                    st.session_state["op_err"] = "⚠️ Debes ingresar un Ticker válido."
+                    st.session_state["op_err"] = "⚠️ Ingresa Ticker válido."
                     st.rerun()
-                
-                # A. Registro en Bitácora (Transactions)
-                nueva_tx = Transaction(
-                    date=op_date, ticker=op_ticker, action=op_action, 
-                    quantity=op_qty, price=op_price, reason=op_reason
-                )
+                nueva_tx = Transaction(date=op_date, ticker=op_ticker, action=op_action, quantity=op_qty, price=op_price, reason=op_reason)
                 session.add(nueva_tx)
-
-                # B. Lógica de Inventario (Solo aplica para Acciones)
                 if instrumento == "Acción":
                     pos = session.query(Position).filter_by(ticker=op_ticker).first()
                     if op_action == "BUY":
@@ -293,54 +381,26 @@ with tab_tx:
                             pos.quantity += op_qty
                             pos.average_cost = new_total_cost / pos.quantity
                         else:
-                            nueva_pos = Position(ticker=op_ticker, quantity=op_qty, average_cost=op_price)
-                            session.add(nueva_pos)
-                    
+                            session.add(Position(ticker=op_ticker, quantity=op_qty, average_cost=op_price))
                     elif op_action == "SELL":
                         if pos:
                             pos.quantity -= op_qty
                             if pos.quantity <= 0:
                                 session.delete(pos)
                         else:
-                            st.session_state["op_err"] = "⚠️ Intento de venta de un activo que no está en el inventario."
+                            st.session_state["op_err"] = "Activo no en inventario."
                             st.rerun()
-
-                # C. Lógica de Flujo de Efectivo (Para el Dashboard de Liquidez)
                 elif instrumento == "Efectivo":
                     multiplier = -1 if op_action == "WITHDRAW" else 1
-                    nuevo_cf = CashFlow(date=op_date, amount=op_price * multiplier, type=op_action)
-                    session.add(nuevo_cf)
-
+                    session.add(CashFlow(date=op_date, amount=op_price * multiplier, type=op_action))
                 session.commit()
-                st.session_state["op_msg"] = f"✅ Operación de {instrumento} registrada correctamente."
+                st.session_state["op_msg"] = "✅ Operación registrada."
             st.rerun()
         except Exception as e:
-            st.error(f"Error crítico en base de datos: {e}")
+            st.error(f"Error BD: {e}")
 
-    # Panel de Eliminación y Visualización de la Bitácora
     st.divider()
     st.subheader("📜 Historial de Transacciones")
-    
     if not df_tx.empty:
-        with st.expander("🛠️ Modo Edición: Eliminar Registro"):
-            st.warning("Al eliminar una transacción de la bitácora, el inventario **no** se recalcula automáticamente.")
-            col_id, col_btn = st.columns([3, 1])
-            with col_id:
-                del_id = st.number_input("Ingresa el ID de la transacción a eliminar:", min_value=int(df_tx['id'].min()), max_value=int(df_tx['id'].max()), step=1)
-            with col_btn:
-                st.write("") 
-                if st.button("Eliminar", type="primary"):
-                    with Session(engine) as session:
-                        tx_to_del = session.query(Transaction).filter_by(id=del_id).first()
-                        if tx_to_del:
-                            session.delete(tx_to_del)
-                            session.commit()
-                            st.session_state["op_msg"] = f"🗑️ Transacción ID {del_id} eliminada."
-                            st.rerun()
-                        else:
-                            st.error("ID no encontrado.")
-
         df_tx_display = df_tx.sort_values(by='date', ascending=False)
         st.dataframe(df_tx_display[['id', 'date', 'ticker', 'action', 'quantity', 'price', 'reason']], use_container_width=True, hide_index=True)
-    else:
-        st.info("No hay transacciones registradas en la bitácora.")

@@ -9,18 +9,18 @@ st.set_page_config(page_title="Portafolio Value", page_icon="🏛️", layout="w
 
 # --- FUNCIONES DE ACCESO A DATOS ---
 def load_positions():
-    with Session(engine) as session:
-        df = pd.read_sql(session.query(Position).statement, session.bind)
+    with engine.connect() as conn:
+        df = pd.read_sql("SELECT * FROM positions", conn)
     return df
 
 def load_cash_flows():
-    with Session(engine) as session:
-        df = pd.read_sql(session.query(CashFlow).statement, session.bind)
+    with engine.connect() as conn:
+        df = pd.read_sql("SELECT * FROM cash_flows", conn)
     return df
 
 def load_transactions():
-    with Session(engine) as session:
-        df = pd.read_sql(session.query(Transaction).statement, session.bind)
+    with engine.connect() as conn:
+        df = pd.read_sql("SELECT * FROM transactions", conn)
     return df
 
 # --- UI PRINCIPAL ---

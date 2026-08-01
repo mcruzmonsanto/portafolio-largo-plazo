@@ -151,9 +151,9 @@ def calculate_scores(row, quality_score_default=85):
     conviction_score = (value_score * 0.35) + (trend_score * 0.25) + (quality_score * 0.20) + (risk_inverted * 0.20)
     
     # 6. Señal (Nuevo requerimiento del usuario)
-    if conviction_score >= 80:
+    if conviction_score >= 75:
         signal = "COMPRA FUERTE"
-    elif conviction_score >= 65:
+    elif conviction_score >= 60:
         signal = "COMPRA"
     elif conviction_score >= 45:
         signal = "ESPERAR"

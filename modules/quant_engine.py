@@ -34,7 +34,9 @@ def fetch_quant_data(tickers):
     def get_info(t):
         try:
             info = yf.Ticker(t).info
-            return t, info.get('marketCap'), info.get('targetMeanPrice'), info.get('trailingEps'), info.get('earningsGrowth') or info.get('revenueGrowth') or 0.05
+            growth_raw = info.get('revenueGrowth') or info.get('earningsGrowth') or 0.05
+            growth_clamped = max(-0.10, min(growth_raw, 0.30))
+            return t, info.get('marketCap'), info.get('targetMeanPrice'), info.get('trailingEps'), growth_clamped
         except:
             return t, None, None, None, 0.05
             

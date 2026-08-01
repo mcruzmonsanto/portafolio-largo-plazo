@@ -18,12 +18,20 @@ def calculate_fair_value(eps: float, target_pe: float, growth_rate: float, curre
     fv_multiple = eps * target_pe
 
     # 2. Valoración de Graham (40%)
-    # 8.5 es el P/E base de Graham para una empresa sin crecimiento.
-    # 4.4 es el rendimiento histórico promedio de bonos corporativos AAA.
+    # Fórmula: Valor = (EPS * (8.5 + 2g) * 4.4) / Y
     fv_graham = (eps * (8.5 + 2 * growth_rate) * 4.4) / bond_yield
+    fv_graham = max(fv_graham, eps * 4.0) # piso: nunca menos que ~4x EPS, evita valores negativos o absurdos
 
-    # 3. Valoración Ponderada Final
-    fv_final = (fv_graham * GRAHAM_WEIGHT) + (fv_multiple * MULTIPLE_WEIGHT)
+    fv_final = (fv_multiple * MULTIPLE_WEIGHT) + (fv_graham * GRAHAM_WEIGHT)
+
+    if fv_final <= 0:
+        return {
+            "fv_graham": round(fv_graham, 2),
+            "fv_multiple": round(fv_multiple, 2),
+            "fv_final": 0.0,
+            "margin_of_safety": -1.0,
+            "is_buy": False
+        }
 
     # 4. Cálculo del Margen de Seguridad
     if current_price > 0:

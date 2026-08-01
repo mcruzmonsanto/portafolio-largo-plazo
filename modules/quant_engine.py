@@ -149,6 +149,9 @@ def calculate_scores(row, quality_score_default=85):
     quality_score = quality_score_default
     
     # 5. Conviction Score (Ponderación Maestro)
+    risk_inverted = 100 - risk_score
+    conviction_score = (value_score * 0.35) + (trend_score * 0.25) + (quality_score * 0.20) + (risk_inverted * 0.20)
+    
     # 6. Señal (compuerta: el valor manda, el momentum solo afina el timing)
     if mos < 0:
         signal = "NO COMPRAR" # sin margen de seguridad, sin importar qué tan bueno se vea el momentum

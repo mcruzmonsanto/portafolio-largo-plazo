@@ -6,7 +6,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import streamlit as st
-from sqlalchemy import create_engine, Column, Integer, String, Float, Date
+from sqlalchemy import create_engine, Column, Integer, String, Float, Date, Identity
 from sqlalchemy.orm import declarative_base, sessionmaker
 from config import DB_PATH, DATA_DIR
 
@@ -39,7 +39,7 @@ class Position(Base):
 
 class Transaction(Base):
     __tablename__ = 'transactions'
-    id = Column(Integer, primary_key=True, autoincrement=True)
+    id = Column(Integer, Identity(start=1, increment=1), primary_key=True)
     date = Column(Date, nullable=False)
     ticker = Column(String, nullable=False)
     action = Column(String, nullable=False)  # 'BUY' o 'SELL'
@@ -49,14 +49,14 @@ class Transaction(Base):
 
 class CashFlow(Base):
     __tablename__ = 'cash_flows'
-    id = Column(Integer, primary_key=True, autoincrement=True)
+    id = Column(Integer, Identity(start=1, increment=1), primary_key=True)
     date = Column(Date, nullable=False)
     amount = Column(Float, nullable=False)
     type = Column(String, nullable=False)
 
 class PortfolioSnapshot(Base):
     __tablename__ = 'portfolio_history'
-    id = Column(Integer, primary_key=True, autoincrement=True)
+    id = Column(Integer, Identity(start=1, increment=1), primary_key=True)
     date = Column(Date, nullable=False, unique=True)
     total_value = Column(Float, nullable=False)
     cash = Column(Float, nullable=False)
@@ -73,7 +73,6 @@ def init_db():
     Base.metadata.create_all(engine)
     print("[OK] Tablas sincronizadas con la base de datos.")
 
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 if __name__ == "__main__":
     init_db()

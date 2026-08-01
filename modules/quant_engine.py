@@ -34,8 +34,14 @@ def fetch_quant_data(tickers):
     def get_info(t):
         try:
             info = yf.Ticker(t).info
+            growth = info.get('revenueGrowth')
+            if growth is None:
+                growth = info.get('earningsGrowth')
+            if growth is None:
+                growth = 0.05
+            
             return t, info.get('marketCap'), info.get('targetMeanPrice'), info.get('trailingEps'), \
-                   info.get('revenueGrowth') or info.get('earningsGrowth') or 0.05, \
+                   growth, \
                    info.get('returnOnEquity'), info.get('operatingMargins') or info.get('profitMargins'), \
                    info.get('debtToEquity')
         except:
@@ -183,6 +189,8 @@ def calculate_scores(row, quality_score_default=85):
         
     # 4. Quality Score
     quality_score = calculate_quality_score(row)
+    if quality_score is None or quality_score == 50:
+        quality_score = quality_score_default
     
     # 5. Conviction Score (Ponderación Maestro)
     risk_inverted = 100 - risk_score

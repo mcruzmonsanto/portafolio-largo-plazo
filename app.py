@@ -9,15 +9,23 @@ import plotly.graph_objects as go
 from modules.db import engine, Position, CashFlow, Transaction, PortfolioSnapshot, WatchlistItem
 from modules.quant_engine import fetch_quant_data, calculate_scores
 from modules.valuation import calculate_fair_value
+from config import MAX_STOCK_WEIGHT, MAX_ETF_WEIGHT, MIN_CASH_TARGET
 
 st.set_page_config(page_title="Terminal Cuantitativo LP", page_icon="📈", layout="wide", initial_sidebar_state="collapsed")
 
 # --- REGLAS DURAS DEL PORTAFOLIO (INSTITUCIONALES) ---
-MAX_STOCK_WEIGHT = 0.10
-MAX_ETF_WEIGHT = 0.60
-MIN_CASH_TARGET = 0.10
 DEFAULT_QUALITY_SCORE = 85
 KNOWN_ETFS = ['SPY', 'VOO', 'QQQ', 'QQQM', 'SMH', 'SPMO', 'DIA', 'IWM', 'VTI', 'VT']
+
+# Cálculo REAL del Margin of Safety global para evitar NameError
+def calc_mos(row):
+    eps = row.get('eps') or 0
+    growth = row.get('growth') or 0.05
+    price = row.get('current_price') or 0
+    if eps and eps > 0 and price > 0:
+        val = calculate_fair_value(eps, 15, growth * 100, price)
+        return val['margin_of_safety']
+    return -1.0
 
 # --- BARRA LATERAL ---
 with st.sidebar:
@@ -62,13 +70,17 @@ df_snap = load_snapshots()
 df_watch = load_watchlist()
 
 # --- CÁLCULO DE LIQUIDEZ Y VALORACIÓN BÁSICA ---
-cash_deposits = df_cash['amount'].sum() if not df_cash.empty else 0.0
+total_cash = df_cash['amount'].sum() if not df_cash.empty else 0.0
 total_cost_basis = (df_pos['quantity'] * df_pos['average_cost']).sum() if not df_pos.empty else 0.0
-total_cash = cash_deposits - total_cost_basis
 
 total_market_value = 0.0
 total_unrealized_pl = 0.0
 portfolio_net_worth = total_cash
+
+if portfolio_net_worth <= 0:
+    st.error("⚠️ El Net Worth calculado es cero o negativo. Revisa tus movimientos de efectivo.")
+    portfolio_net_worth = 0.01
+
 df_enriched = pd.DataFrame()
 
 if not df_pos.empty:
@@ -78,6 +90,7 @@ if not df_pos.empty:
         
         if not df_quant.empty:
             df_enriched = pd.merge(df_pos, df_quant, on='ticker', how='left')
+            df_enriched['current_price'] = df_enriched['current_price'].replace(0, pd.NA)
             df_enriched['current_price'] = df_enriched['current_price'].fillna(df_enriched['average_cost'])
             
             df_enriched['market_value'] = df_enriched['quantity'] * df_enriched['current_price']
@@ -88,16 +101,6 @@ if not df_pos.empty:
             # Clasificación de Activos
             df_enriched['asset_type'] = df_enriched['ticker'].apply(lambda x: 'ETF' if x in KNOWN_ETFS else 'Stock')
             
-            # Cálculo REAL del Margin of Safety
-            def calc_mos(row):
-                eps = row.get('eps') or 0
-                growth = row.get('growth') or 0.05
-                price = row.get('current_price') or 0
-                if eps and eps > 0 and price > 0:
-                    val = calculate_fair_value(eps, 15, growth * 100, price)
-                    return val['margin_of_safety']
-                return -1.0
-                
             df_enriched['margin_of_safety'] = df_enriched.apply(calc_mos, axis=1)
             
             # Scores
@@ -276,20 +279,14 @@ with tab_watch:
                         
                     df_wq['Action_Plan'] = df_wq.apply(get_buy_suggestion, axis=1)
                     
-                    # Calcular Upside % y Tiempo Estimado
-                    df_wq['upside_pct'] = 0.0
-                    df_wq['time_to_target_months'] = 0.0
-                    for idx, r in df_wq.iterrows():
-                        if pd.notna(r.get('target_price')) and pd.notna(r.get('current_price')) and r['current_price'] > 0:
-                            upside_decimal = (r['target_price'] - r['current_price']) / r['current_price']
-                            df_wq.at[idx, 'upside_pct'] = upside_decimal * 100
-                            
-                            # Heurística simple de tiempo estimado basado en volatilidad anualizada
-                            vol = r.get('volatility', 0.25)
-                            if vol > 0 and upside_decimal > 0:
-                                # Meses = (Retorno requerido / Volatilidad anual) * 12
-                                est_months = (upside_decimal / vol) * 12
-                                df_wq.at[idx, 'time_to_target_months'] = est_months
+                    # Calcular Upside % y Tiempo Estimado de forma vectorizada
+                    df_wq['upside_pct'] = ((df_wq['target_price'] - df_wq['current_price']) / df_wq['current_price'] * 100).where(
+                        df_wq['target_price'].notna() & df_wq['current_price'].notna() & (df_wq['current_price'] > 0), 0.0
+                    )
+                    
+                    df_wq['time_to_target_months'] = ((df_wq['target_price'] - df_wq['current_price']) / df_wq['current_price'] / df_wq['volatility'].replace(0, pd.NA) * 12).where(
+                        df_wq['target_price'].notna() & df_wq['current_price'].notna() & (df_wq['current_price'] > 0) & df_wq['volatility'].notna(), float('inf')
+                    )
                     
                     # Convertir Market Cap a Billones (B) para que sea numérico y se pueda ordenar
                     df_wq['market_cap_billions'] = df_wq['market_cap'] / 1e9
@@ -346,6 +343,8 @@ with tab_reb:
         max_investable = 1.0 - MIN_CASH_TARGET
         if total_target > max_investable and total_target > 0:
             df_buy['target_weight'] = (df_buy['target_weight'] / total_target) * max_investable
+        elif total_target == 0:
+            df_buy['target_weight'] = 0.0
             
         df_buy['weight_delta'] = df_buy['target_weight'] - df_buy['weight']
         df_buy['Action'] = df_buy.apply(lambda r: "COMPRAR" if r['weight_delta'] > 0.01 else ("REDUCIR" if r['weight_delta'] < -0.01 else "MANTENER"), axis=1)
@@ -439,13 +438,15 @@ with tab_tx:
                         else:
                             session.add(Position(ticker=op_ticker, quantity=op_qty, average_cost=op_price))
                     elif op_action == "SELL":
-                        if pos:
-                            pos.quantity -= op_qty
-                            if pos.quantity <= 0:
-                                session.delete(pos)
-                        else:
+                        if not pos:
                             st.session_state["op_err"] = "Activo no en inventario."
                             st.rerun()
+                        if op_qty > pos.quantity:
+                            st.session_state["op_err"] = f"Solo posees {pos.quantity:.4f} unidades."
+                            st.rerun()
+                        pos.quantity -= op_qty
+                        if pos.quantity <= 0:
+                            session.delete(pos)
                 elif instrumento == "Efectivo":
                     multiplier = -1 if op_action == "WITHDRAW" else 1
                     session.add(CashFlow(date=op_date, amount=op_price * multiplier, type=op_action))

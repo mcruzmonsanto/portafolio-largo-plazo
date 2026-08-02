@@ -131,7 +131,7 @@ def generate_tear_sheet(df_enriched: pd.DataFrame, portfolio_net_worth: float, t
         pdf.cell(0, 8, 'VIOLACIONES DETECTADAS:', border=0, ln=True)
         pdf.set_font('helvetica', '', 11)
         for v in violations:
-            pdf.multi_cell(0, 6, f"• {v}", border=0)
+            pdf.multi_cell(0, 6, f"- {v}", border=0)
         
     pdf.set_text_color(0, 0, 0)
     pdf.ln(6)

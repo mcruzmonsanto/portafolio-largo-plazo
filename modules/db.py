@@ -64,6 +64,8 @@ class LedgerEntry(Base):
     amount = Column(Float, nullable=False)
     ticker = Column(String, nullable=True)
     memo = Column(String, nullable=True)
+    previous_hash = Column(String, nullable=True)
+    entry_hash = Column(String, nullable=True)
 
 class PortfolioSnapshot(Base):
     __tablename__ = 'portfolio_history'

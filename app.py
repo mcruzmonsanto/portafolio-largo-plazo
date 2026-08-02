@@ -15,6 +15,7 @@ from modules.valuation import calculate_fair_value
 from modules.scanner import AutoScanner, UNIVERSES
 from modules.risk_manager import RiskManager
 from modules.reporting import generate_tear_sheet
+from modules.audit import LedgerAuditor
 from portfolio_config import MAX_STOCK_WEIGHT, MAX_ETF_WEIGHT
 
 st.set_page_config(page_title="Terminal Cuantitativo LP", page_icon="📈", layout="wide", initial_sidebar_state="collapsed")
@@ -62,6 +63,14 @@ with st.sidebar:
     st.markdown(f"**VIX:** {regime_data['vix']:.2f}")
     st.markdown(f"**Apetito de Riesgo:** {risk_multiplier}x")
     
+    st.markdown("---")
+    st.subheader("⛓️ Auditoría (Blockchain)")
+    audit_report = LedgerAuditor.verify_chain()
+    if audit_report["status"] == "OK":
+        st.success(f"**VÁLIDO**\n\n{audit_report['valid_entries']} transacciones aseguradas criptográficamente.")
+    else:
+        st.error(f"**CORRUPCIÓN DETECTADA**\n\n{audit_report['message']}")
+
     st.markdown("---")
     st.info("📸 El Snapshot histórico se guarda automáticamente una vez al día.")
 

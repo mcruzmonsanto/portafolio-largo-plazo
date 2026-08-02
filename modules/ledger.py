@@ -2,7 +2,9 @@ import uuid
 from enum import Enum
 from datetime import datetime
 from sqlalchemy.orm import Session
+from sqlalchemy import desc
 from modules.db import LedgerEntry
+from modules.audit import LedgerAuditor
 
 class AccountType(Enum):
     ASSET_CASH = "ASSET:CASH"
@@ -17,16 +19,36 @@ class LedgerManager:
         self.session = session
         
     def _create_entry(self, date: datetime, tx_id: str, debit: str, credit: str, amount: float, ticker: str = None, memo: str = ""):
+        # Recuperar el hash del bloque anterior (la última fila insertada en la DB)
+        last_entry = self.session.query(LedgerEntry).order_by(desc(LedgerEntry.id)).first()
+        prev_hash = last_entry.entry_hash if last_entry and last_entry.entry_hash else "GENESIS"
+        
+        # Generar firma para esta transacción
+        entry_data = {
+            'date': date.strftime('%Y-%m-%d') if hasattr(date, 'strftime') else str(date),
+            'transaction_id': tx_id,
+            'debit_account': debit,
+            'credit_account': credit,
+            'amount': amount,
+            'ticker': ticker if ticker else '',
+            'previous_hash': prev_hash
+        }
+        
+        current_hash = LedgerAuditor.generate_hash(entry_data)
+        
         entry = LedgerEntry(
             date=date,
             transaction_id=tx_id,
             debit_account=debit,
             credit_account=credit,
             amount=amount,
-            ticker=ticker,
-            memo=memo
+            ticker=ticker if ticker else '',
+            memo=memo,
+            previous_hash=prev_hash,
+            entry_hash=current_hash
         )
         self.session.add(entry)
+        self.session.flush() # Obliga a generar el ID para el siguiente bloque en la misma transacción
         
     def record_deposit(self, date: datetime, amount: float, memo: str = "Deposit"):
         """ DR ASSET:CASH | CR EQUITY:DEPOSIT """

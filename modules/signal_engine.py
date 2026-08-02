@@ -38,9 +38,12 @@ class BayesianSignal:
         
         prob_success = self._sigmoid(logit)
         
+        # --- REGLA DURA (Hard Constraint) ---
+        # Si el margen de seguridad es 0 o negativo, nunca debemos comprar.
+        if margin_of_safety <= 0.0:
+            prob_success = min(prob_success, 0.49)
+        
         # Criterio de Kelly
-        # f* = (p*b - q) / b
-        # p = prob_success, q = 1 - p, b = payoff_ratio
         p = prob_success
         q = 1.0 - p
         b = self.payoff_ratio
@@ -53,10 +56,19 @@ class BayesianSignal:
         
         signal_label = self._classify(p, adjusted_kelly)
         
+        debug_info = {
+            'mos': margin_of_safety,
+            'z_score': composite_z,
+            'logit': logit,
+            'p_success': prob_success,
+            'kelly': adjusted_kelly
+        }
+        
         return {
             'prob_success': prob_success,
             'kelly_fraction': adjusted_kelly,
-            'Signal': signal_label
+            'Signal': signal_label,
+            '_debug': debug_info
         }
         
     def _classify(self, p: float, kelly: float) -> str:

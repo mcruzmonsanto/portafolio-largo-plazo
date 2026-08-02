@@ -50,37 +50,47 @@ def generate_tear_sheet(df_enriched: pd.DataFrame, portfolio_net_worth: float, t
     
     cash_pct = (total_cash / portfolio_net_worth * 100) if portfolio_net_worth > 0 else 0
     
-    # Datos en 2 columnas
-    left_margin = pdf.get_x()
-    pdf.cell(50, 8, 'Net Worth:', border=0)
+    # Datos en 2 columnas con posiciones absolutas
+    y_start = pdf.get_y()
+    
+    # Columna 1
+    pdf.set_xy(10, y_start)
+    pdf.set_font('helvetica', '', 11)
+    pdf.cell(25, 8, 'Net Worth:', border=0)
     pdf.set_font('helvetica', 'B', 11)
     pdf.cell(50, 8, f'${portfolio_net_worth:,.2f}', border=0)
     
+    # Columna 2
+    pdf.set_xy(100, y_start)
     pdf.set_font('helvetica', '', 11)
-    pdf.cell(40, 8, 'Régimen Macro:', border=0)
+    pdf.cell(35, 8, 'Régimen Macro:', border=0)
     pdf.set_font('helvetica', 'B', 11)
-    
-    # Color según régimen
     if 'Bull' in regime:
         pdf.set_text_color(39, 174, 96) # Verde
     elif 'Bear' in regime or 'Panic' in regime:
         pdf.set_text_color(192, 57, 43) # Rojo
     else:
         pdf.set_text_color(243, 156, 18) # Amarillo
-    pdf.cell(90, 8, regime, border=0, ln=True)
+    pdf.cell(60, 8, regime, border=0)
     
     pdf.set_text_color(0, 0, 0)
+    y_next = y_start + 8
+    
+    # Fila 2, Columna 1
+    pdf.set_xy(10, y_next)
     pdf.set_font('helvetica', '', 11)
-    pdf.cell(50, 8, 'Liquidez (Cash):', border=0)
+    pdf.cell(35, 8, 'Liquidez (Cash):', border=0)
     pdf.set_font('helvetica', 'B', 11)
     pdf.cell(50, 8, f'${total_cash:,.2f} ({cash_pct:.1f}%)', border=0)
     
+    # Fila 2, Columna 2
+    pdf.set_xy(100, y_next)
     pdf.set_font('helvetica', '', 11)
-    pdf.cell(40, 8, 'Beta Ponderado:', border=0)
+    pdf.cell(35, 8, 'Beta Ponderado:', border=0)
     pdf.set_font('helvetica', 'B', 11)
-    pdf.cell(40, 8, f'{beta_val:.2f}', border=0, ln=True)
+    pdf.cell(40, 8, f'{beta_val:.2f}', border=0)
     
-    pdf.ln(10)
+    pdf.set_y(y_next + 12)
     
     # 2. Análisis de Riesgo
     pdf.set_font('helvetica', 'B', 14)
@@ -114,13 +124,17 @@ def generate_tear_sheet(df_enriched: pd.DataFrame, portfolio_net_worth: float, t
 
     if not violations:
         pdf.set_text_color(39, 174, 96)
-        pdf.cell(80, 8, 'CUMPLE', border=0, ln=True)
+        pdf.cell(0, 8, 'CUMPLE CON TODOS LOS MANDATOS', border=0, ln=True)
     else:
         pdf.set_text_color(192, 57, 43)
-        pdf.cell(80, 8, f'VIOLACIONES DETECTADAS: {", ".join(violations)}', border=0, ln=True)
+        pdf.set_font('helvetica', 'B', 11)
+        pdf.cell(0, 8, 'VIOLACIONES DETECTADAS:', border=0, ln=True)
+        pdf.set_font('helvetica', '', 11)
+        for v in violations:
+            pdf.multi_cell(0, 6, f"• {v}", border=0)
         
     pdf.set_text_color(0, 0, 0)
-    pdf.ln(10)
+    pdf.ln(6)
     
     # 3. Top Posiciones
     pdf.set_font('helvetica', 'B', 14)

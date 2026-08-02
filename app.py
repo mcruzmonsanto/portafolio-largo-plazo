@@ -58,8 +58,11 @@ def calc_valuation(row):
         val = calculate_fair_value(eps, 15, growth * 100, price)
     else:
         val = {"fv_graham": price, "fv_final": price, "margin_of_safety": 0.0}
+    mos = val.get('margin_of_safety', 0)
+    if abs(mos) < 0.001:
+        mos = 0.0
         
-    return pd.Series([val.get('fv_graham', 0), val.get('fv_final', 0), val.get('margin_of_safety', 0)])
+    return pd.Series([val.get('fv_graham', 0), val.get('fv_final', 0), mos])
 
 @st.cache_data(ttl=3600)
 def get_market_regime():

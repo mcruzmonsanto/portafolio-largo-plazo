@@ -379,7 +379,7 @@ with tab_watch:
                 import math
                 df_wq = fetch_quant_data(w_tickers)
                 if not df_wq.empty:
-                    df_wq[['fair_value_graham', 'fair_value_final', 'margin_of_safety']] = df_wq.apply(calc_valuation, axis=1)
+                    df_wq['margin_of_safety'] = df_wq.apply(calc_mos, axis=1)
                     
                     from modules.quant_engine import calculate_scores
                     w_scores = df_wq.apply(lambda r: calculate_scores(r, quality_score_default=DEFAULT_QUALITY_SCORE), axis=1)

@@ -34,7 +34,7 @@ logger = logging.getLogger("PortafolioApp")
 # --- REGLAS DURAS DEL PORTAFOLIO (INSTITUCIONALES) ---
 DEFAULT_QUALITY_SCORE = 85
 
-from modules.valuation import calculate_fair_value, calculate_fair_value_etf
+from modules.valuation import calculate_fair_value
 
 def format_currency(value):
     if pd.isna(value): return "-"
@@ -52,12 +52,13 @@ def calc_valuation(row):
     growth = row.get('growth') or 0.05
     price = row.get('current_price') or 0
     
-    if ticker in KNOWN_ETFS:
-        val = calculate_fair_value_etf(ticker, price)
-    elif eps and eps > 0 and price > 0:
-        val = calculate_fair_value(eps, 15, growth * 100, price)
-    else:
-        val = {"fv_graham": price, "fv_final": price, "margin_of_safety": 0.0}
+    val = calculate_fair_value(
+        eps=eps,
+        target_pe=15,
+        growth_rate=growth * 100,
+        current_price=price,
+        ticker=ticker
+    )
     mos = val.get('margin_of_safety', 0)
     if abs(mos) < 0.001:
         mos = 0.0

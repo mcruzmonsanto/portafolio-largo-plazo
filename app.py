@@ -170,12 +170,9 @@ if not df_pos.empty:
             
             df_enriched[['fair_value_graham', 'fair_value_final', 'margin_of_safety']] = df_enriched.apply(calc_valuation, axis=1)
             
-            # Scores con gestión de riesgo macro
-            signal_engine = BayesianSignal(payoff_ratio=3.0, risk_multiplier=risk_multiplier)
-            def _apply_signal(row):
-                return signal_engine.generate_signal(row.get('composite_z', 0), row.get('margin_of_safety', 0))
-                
-            scores = df_enriched.apply(_apply_signal, axis=1)
+            # Scores Institucionales
+            from modules.quant_engine import calculate_scores
+            scores = df_enriched.apply(lambda r: calculate_scores(r, quality_score_default=DEFAULT_QUALITY_SCORE), axis=1)
             scores_df = pd.DataFrame(list(scores))
             df_enriched = pd.concat([df_enriched, scores_df], axis=1)
             
@@ -246,7 +243,7 @@ with tab_dash:
     with col_chart2:
         st.subheader("Inventario Consolidado")
         if not df_enriched.empty:
-            disp_cols = ['ticker', 'quality', 'current_price', 'market_value', 'weight', 'unrealized_pl_pct', 'prob_success', 'Signal']
+            disp_cols = ['ticker', 'quality', 'current_price', 'market_value', 'weight', 'unrealized_pl_pct', 'ConvictionScore', 'TrendScore', 'ValueScore', 'Signal']
             
             def color_signal(val):
                 color = 'green' if 'COMPRA' in str(val) else 'red' if 'NO COMPRAR' in str(val) else 'gray'
@@ -330,8 +327,8 @@ with tab_watch:
                 if not df_wq.empty:
                     df_wq[['fair_value_graham', 'fair_value_final', 'margin_of_safety']] = df_wq.apply(calc_valuation, axis=1)
                     
-                    signal_engine = BayesianSignal(payoff_ratio=3.0, risk_multiplier=risk_multiplier)
-                    w_scores = df_wq.apply(lambda r: signal_engine.generate_signal(r.get('composite_z', 0), r.get('margin_of_safety', 0)), axis=1)
+                    from modules.quant_engine import calculate_scores
+                    w_scores = df_wq.apply(lambda r: calculate_scores(r, quality_score_default=DEFAULT_QUALITY_SCORE), axis=1)
                     w_scores_df = pd.DataFrame(list(w_scores))
                     df_wq = pd.concat([df_wq, w_scores_df], axis=1)
                     

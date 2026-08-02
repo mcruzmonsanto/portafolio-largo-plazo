@@ -109,7 +109,7 @@ class AsyncScanner:
         valid_results.sort(key=lambda x: x.composite_score, reverse=True)
         return valid_results
     
-    def get_top_opportunities(self, n: int = 20) -> pd.DataFrame:
+    def get_top_opportunities(self, universe_name: str = 'sp500', n: int = 20) -> pd.DataFrame:
         """Wrapper síncrono para uso en Streamlit."""
-        results = asyncio.run(self.scan_universe())
+        results = asyncio.run(self.scan_universe(universe_name=universe_name))
         return pd.DataFrame([vars(r) for r in results[:n]])

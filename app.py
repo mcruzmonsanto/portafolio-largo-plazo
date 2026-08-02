@@ -10,11 +10,11 @@ import plotly.graph_objects as go
 from modules.db import engine, Position, CashFlow, Transaction, PortfolioSnapshot, WatchlistItem, LedgerEntry
 from modules.ledger import LedgerManager
 from modules.quant_engine import fetch_quant_data
-from modules.signal_engine import BayesianSignal
+from modules.signal_engine import BayesianSignalEngine, Signal
 from modules.valuation import calculate_fair_value
-from modules.scanner import AutoScanner, UNIVERSES
-from modules.risk_manager import RiskManager
-from modules.reporting import generate_tear_sheet
+from modules.scanner import AsyncScanner
+from modules.risk_manager import DynamicRiskManager
+from modules.reporting import PortfolioTearSheet
 from modules.audit import LedgerAuditor
 from portfolio_config import MAX_STOCK_WEIGHT, MAX_ETF_WEIGHT, KNOWN_ETFS
 
@@ -77,7 +77,7 @@ def calc_mos(row):
 
 @st.cache_data(ttl=3600)
 def get_market_regime():
-    return RiskManager().detect_market_regime()
+    return DynamicRiskManager().detect_market_regime()
 
 regime_data = get_market_regime()
 dynamic_min_cash = regime_data['cash_target']
@@ -335,7 +335,23 @@ with tab_dash:
         if st.button("Generar Portfolio Tear Sheet (PDF)"):
             with st.spinner("Compilando reporte..."):
                 try:
-                    pdf_bytes = generate_tear_sheet(df_enriched, portfolio_net_worth, total_cash, beta_val, regime_data['regime'], dynamic_min_cash)
+                    from dataclasses import dataclass
+                    @dataclass
+                    class DummyPortfolio:
+                        nav: float
+                        cash: float
+                        positions: pd.DataFrame
+                        def calculate_var(self, conf, days): return 0.0
+                        def get_sector_exposure(self): return {}
+                    
+                    dummy_port = DummyPortfolio(nav=portfolio_net_worth, cash=total_cash, positions=df_enriched)
+                    metrics = {'total_return': 0.0, 'sharpe': 0.0}
+                    risk_report = {'regime': regime_data['regime'], 'compliant': True, 'violations': []}
+                    signals = [] # Puede poblarse con df_enriched
+                    
+                    tear_sheet = PortfolioTearSheet(dummy_port, metrics, risk_report, signals)
+                    pdf_bytes = tear_sheet.generate()
+                    
                     st.download_button(
                         label="📄 Descargar Documento",
                         data=pdf_bytes,
@@ -495,16 +511,18 @@ with tab_scan:
     col_s1, col_s2 = st.columns([1, 4])
     with col_s1:
         st.write("Configuración")
-        selected_universe = st.selectbox("Universo a Escanear", list(UNIVERSES.keys()))
+        selected_universe = st.selectbox("Universo a Escanear", list(AsyncScanner.UNIVERSES.keys()))
         min_kelly_filter = st.slider("Min. Kelly %", min_value=0.01, max_value=0.20, value=0.05, step=0.01)
         run_scan = st.button("🚀 Ejecutar Escáner")
         
     with col_s2:
         if run_scan:
             with st.spinner(f"Escaneando {selected_universe}... esto puede tomar un momento."):
-                scanner = AutoScanner()
+                from modules.signal_engine import BayesianSignalEngine
+                from modules.risk_manager import DynamicRiskManager
+                scanner = AsyncScanner(signal_engine=BayesianSignalEngine(), risk_manager=DynamicRiskManager())
                 try:
-                    df_opps = scanner.scan_universe(selected_universe, min_kelly=min_kelly_filter)
+                    df_opps = scanner.get_top_opportunities(universe_name=selected_universe, n=50)
                     if df_opps.empty:
                         st.warning("No se encontraron oportunidades que cumplan los estrictos filtros de riesgo y margen de seguridad.")
                     else:
@@ -516,7 +534,7 @@ with tab_scan:
                             return 'background-color: #1a2f24; color: #2ecc71;'
                             
                         df_opps['kelly_fraction_pct'] = df_opps['kelly_fraction'] * 100
-                        styled_opps = df_opps[['ticker', 'current_price', 'composite_z', 'prob_success', 'kelly_fraction_pct', 'Signal']].style.map(color_scanner_signal, subset=['Signal'])
+                        styled_opps = df_opps[['ticker', 'composite_score', 'prob_success', 'kelly_fraction_pct', 'signal']].style.map(color_scanner_signal, subset=['signal'])
                         
                         st.dataframe(
                             styled_opps,

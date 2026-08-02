@@ -72,46 +72,76 @@ class DynamicRiskManager:
         self.spy = yf.Ticker("SPY")
         self.vix = yf.Ticker("^VIX")
     
-    def detect_regime(self) -> MarketRegime:
+    def detect_market_regime(self) -> dict:
         """
-        Detecta el régimen actual basado en:
-        1. SPY vs SMA 200 (tendencia)
-        2. VIX nivel (volatilidad implícita)
-        3. SPY vs SMA 50 (momentum corto)
-        4. Drawdown desde máximo
+        Detecta el régimen actual (para compatibilidad con app.py original).
         """
-        # Descargar datos
         spy_hist = self.spy.history(period="2y")
         vix_hist = self.vix.history(period="30d")
         
         if spy_hist.empty or vix_hist.empty:
-            return MarketRegime.RECOVERY  # Conservador por defecto
+            return {
+                'regime': 'Recovery',
+                'spy_price': 0,
+                'spy_sma200': 0,
+                'vix': 0,
+                'cash_target': 0.15,
+                'risk_multiplier': 1.0
+            }
         
-        # Indicadores
         current_spy = spy_hist['Close'].iloc[-1]
         sma200 = spy_hist['Close'].rolling(200).mean().iloc[-1]
         sma50 = spy_hist['Close'].rolling(50).mean().iloc[-1]
         vix_current = vix_hist['Close'].iloc[-1]
         
-        # Drawdown
         peak = spy_hist['Close'].cummax().iloc[-1]
         drawdown = (current_spy - peak) / peak
         
-        # Reglas de clasificación
         if drawdown < -0.20:
-            return MarketRegime.CRISIS
+            regime = 'Panic'
+            cash_target = 0.50
+            risk_multiplier = 0.5
         elif drawdown < -0.10:
-            return MarketRegime.BEAR
+            regime = 'Bear'
+            cash_target = 0.30
+            risk_multiplier = 0.8
         elif current_spy < sma200 and vix_current > 25:
-            return MarketRegime.BEAR
+            regime = 'Bear'
+            cash_target = 0.30
+            risk_multiplier = 0.8
         elif current_spy > sma200 and vix_current > 20:
-            return MarketRegime.BULL_HIGH_VOL
+            regime = 'Bull High Vol'
+            cash_target = 0.10
+            risk_multiplier = 1.0
         elif current_spy > sma200 and current_spy > sma50 and vix_current < 20:
-            return MarketRegime.BULL_LOW_VOL
-        elif current_spy > sma200 and current_spy < sma50:
-            return MarketRegime.RECOVERY
+            regime = 'Bull Low Vol'
+            cash_target = 0.05
+            risk_multiplier = 1.2
         else:
-            return MarketRegime.RECOVERY
+            regime = 'Recovery'
+            cash_target = 0.15
+            risk_multiplier = 1.0
+            
+        return {
+            'regime': regime,
+            'spy_price': current_spy,
+            'spy_sma200': sma200,
+            'vix': vix_current,
+            'cash_target': cash_target,
+            'risk_multiplier': risk_multiplier
+        }
+    
+    def detect_regime(self) -> MarketRegime:
+        """
+        Detecta el régimen actual (para el nuevo flujo).
+        """
+        data = self.detect_market_regime()
+        regime_str = data['regime']
+        if regime_str == 'Panic': return MarketRegime.CRISIS
+        elif regime_str == 'Bear': return MarketRegime.BEAR
+        elif regime_str == 'Bull High Vol': return MarketRegime.BULL_HIGH_VOL
+        elif regime_str == 'Bull Low Vol': return MarketRegime.BULL_LOW_VOL
+        return MarketRegime.RECOVERY
     
     def get_current_profile(self) -> RiskProfile:
         regime = self.detect_regime()

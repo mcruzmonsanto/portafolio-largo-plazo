@@ -142,10 +142,18 @@ df_tx = load_transactions()
 df_snap = load_snapshots()
 df_watch = load_watchlist()
 
-# --- CÁLCULO DE LIQUIDEZ Y VALORACIÓN BÁSICA ---
-# ─── FIX CRÍTICO: El cash es el saldo neto de movimientos de efectivo ───
-total_cash = df_cash['amount'].sum() if not df_cash.empty else 0.0
-logger.info(f"CASH_CALC: total_cash={total_cash} from {len(df_cash)} cash_flow records")
+# ─── FIX DEFINITIVO: El saldo de cash proviene del Ledger de partida doble ───
+# LedgerManager registra cada DR/CR de depósitos, compras, ventas y dividendos.
+# La tabla cash_flows solo se usa para depósitos/retiros manuales YA registrados
+# en el ledger — NO debe usarse para calcular cash disponible.
+try:
+    with Session(engine) as _cs:
+        _lm = LedgerManager(_cs)
+        total_cash = _lm.get_cash_balance()
+except Exception as _e:
+    logger.error(f"Error leyendo saldo del Ledger: {_e}")
+    total_cash = df_cash['amount'].sum() if not df_cash.empty else 0.0  # Fallback
+logger.info(f"CASH_CALC (Ledger): total_cash={total_cash:.2f}")
 
 total_cost_basis = (df_pos['quantity'] * df_pos['average_cost']).sum() if not df_pos.empty else 0.0
 

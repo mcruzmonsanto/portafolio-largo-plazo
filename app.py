@@ -32,9 +32,10 @@ logging.basicConfig(
 logger = logging.getLogger("PortafolioApp")
 
 # --- REGLAS DURAS DEL PORTAFOLIO (INSTITUCIONALES) ---
+MAX_STOCK_WEIGHT = 0.10
+MAX_ETF_WEIGHT = 0.60
+MIN_CASH_TARGET = 0.10
 DEFAULT_QUALITY_SCORE = 85
-
-from modules.valuation import calculate_fair_value
 
 def format_currency(value):
     if pd.isna(value): return "-"
@@ -46,24 +47,33 @@ def format_percentage(value, decimals=1):
     if pd.isna(value): return "-"
     return f"{value*100:.{decimals}f}%"
 
-def calc_valuation(row):
+def calc_mos(row):
+    """
+    Calcula Margin of Safety para una fila del dataframe.
+    ETFs se valoran por NAV, acciones por Graham+Multiples.
+    """
     ticker = row.get('ticker', '')
-    eps = row.get('eps') or 0
-    growth = row.get('growth') or 0.05
-    price = row.get('current_price') or 0
-    
+    eps = row.get('eps')
+    growth = row.get('growth')
+    price = row.get('current_price')
+
+    # ─── FIX: Validar precio ───
+    if price is None or price <= 0:
+        logger.warning(f"{ticker}: Precio inválido ({price}), usando average_cost")
+        price = row.get('average_cost', 0)
+
+    # ─── FIX: Pasar ticker para detección de ETF ───
     val = calculate_fair_value(
-        eps=eps,
-        target_pe=15,
-        growth_rate=growth * 100,
+        eps=eps or 0, 
+        target_pe=15, 
+        growth_rate=(growth or 0.05) * 100, 
         current_price=price,
         ticker=ticker
     )
-    mos = val.get('margin_of_safety', 0)
-    if abs(mos) < 0.001:
-        mos = 0.0
-        
-    return pd.Series([val.get('fv_graham', 0), val.get('fv_final', 0), mos])
+
+    logger.info(f"MOS_CALC: {ticker} | price={price} | eps={eps} | growth={growth} | MOS={val.get('margin_of_safety', 0)} | method={val.get('method', 'unknown')}")
+
+    return val.get('margin_of_safety', 0)
 
 @st.cache_data(ttl=3600)
 def get_market_regime():
@@ -133,11 +143,10 @@ df_snap = load_snapshots()
 df_watch = load_watchlist()
 
 # --- CÁLCULO DE LIQUIDEZ Y VALORACIÓN BÁSICA ---
-cash_injected = df_cash['amount'].sum() if not df_cash.empty else 0.0
-cash_spent = (df_tx[df_tx['action'] == 'BUY']['quantity'] * df_tx[df_tx['action'] == 'BUY']['price']).sum() if not df_tx.empty else 0.0
-cash_gained = (df_tx[df_tx['action'] == 'SELL']['quantity'] * df_tx[df_tx['action'] == 'SELL']['price']).sum() if not df_tx.empty else 0.0
-total_cash = cash_injected - cash_spent + cash_gained
-    
+# ─── FIX CRÍTICO: El cash es el saldo neto de movimientos de efectivo ───
+total_cash = df_cash['amount'].sum() if not df_cash.empty else 0.0
+logger.info(f"CASH_CALC: total_cash={total_cash} from {len(df_cash)} cash_flow records")
+
 total_cost_basis = (df_pos['quantity'] * df_pos['average_cost']).sum() if not df_pos.empty else 0.0
 
 total_market_value = 0.0
@@ -149,6 +158,7 @@ if portfolio_net_worth <= 0:
     portfolio_net_worth = 0.01
 
 df_enriched = pd.DataFrame()
+violations = []
 
 if not df_pos.empty:
     with st.spinner("Sincronizando mercado y cuantificando riesgo..."):
@@ -156,9 +166,13 @@ if not df_pos.empty:
         df_quant = fetch_quant_data(tickers)
         
         if not df_quant.empty:
-            df_enriched = pd.merge(df_pos, df_quant, on='ticker', how='left')
-            df_enriched['current_price'] = df_enriched['current_price'].replace(0, pd.NA)
-            df_enriched['current_price'] = df_enriched['current_price'].fillna(df_enriched['average_cost'])
+            # ─── FIX: Merge con sufijos explícitos para evitar columnas duplicadas ───
+            df_enriched = pd.merge(df_pos, df_quant, on='ticker', how='left', suffixes=('_pos', '_quant'))
+            
+            # ─── SINGLE SOURCE OF TRUTH para precio ───
+            df_enriched['price_for_calc'] = df_enriched['current_price_quant'].replace(0, pd.NA)
+            df_enriched['price_for_calc'] = df_enriched['price_for_calc'].fillna(df_enriched['average_cost'])
+            df_enriched['current_price'] = df_enriched['price_for_calc']
             
             df_enriched['market_value'] = df_enriched['quantity'] * df_enriched['current_price']
             df_enriched['cost_basis'] = df_enriched['quantity'] * df_enriched['average_cost']
@@ -168,19 +182,46 @@ if not df_pos.empty:
             # Clasificación de Activos
             df_enriched['asset_type'] = df_enriched['ticker'].apply(lambda x: 'ETF' if x in KNOWN_ETFS else 'Stock')
             
-            df_enriched[['fair_value_graham', 'fair_value_final', 'margin_of_safety']] = df_enriched.apply(calc_valuation, axis=1)
+            # ─── FIX: Calcular MOS con función corregida ───
+            df_enriched['margin_of_safety'] = df_enriched.apply(calc_mos, axis=1)
             
             # Scores Institucionales
             from modules.quant_engine import calculate_scores
             scores = df_enriched.apply(lambda r: calculate_scores(r, quality_score_default=DEFAULT_QUALITY_SCORE), axis=1)
             scores_df = pd.DataFrame(list(scores))
+            
+            # ─── FIX: Extraer debug info para auditoría ───
+            if '_debug' in scores_df.columns:
+                debug_df = pd.json_normalize(scores_df['_debug'].tolist())
+                debug_df['ticker'] = df_enriched['ticker'].values
+                logger.info(f"SCORES_DEBUG:\n{debug_df[['ticker', 'mos', 'signal_logic', 'is_etf']].to_string()}")
+                scores_df = scores_df.drop(columns=['_debug'])
+                
             df_enriched = pd.concat([df_enriched, scores_df], axis=1)
             
             total_market_value = df_enriched['market_value'].sum()
             total_unrealized_pl = df_enriched['unrealized_pl'].sum()
             portfolio_net_worth = total_market_value + total_cash
             
-            df_enriched['weight'] = df_enriched['market_value'] / portfolio_net_worth if portfolio_net_worth > 0 else 0
+            if portfolio_net_worth <= 0:
+                st.error("⚠️ El Net Worth calculado es cero o negativo. Revisa tus movimientos de efectivo.")
+                portfolio_net_worth = 0.01
+                
+            df_enriched['weight'] = df_enriched['market_value'] / portfolio_net_worth
+            
+            # ─── FIX: Validación de límites de riesgo ───
+            for _, row in df_enriched.iterrows():
+                max_w = MAX_ETF_WEIGHT if row['asset_type'] == 'ETF' else MAX_STOCK_WEIGHT
+                if row['weight'] > max_w:
+                    violations.append({
+                        'ticker': row['ticker'],
+                        'weight': row['weight'],
+                        'limit': max_w,
+                        'excess': row['weight'] - max_w
+                    })
+                    
+            if violations:
+                logger.warning(f"RISK_VIOLATIONS: {violations}")
 
 # --- LÓGICA DE GUARDADO DE SNAPSHOT AUTOMÁTICO ---
 try:
@@ -208,8 +249,17 @@ c3.metric("P/L Abierto", f"${total_unrealized_pl:,.2f}", delta=f"{(total_unreali
 beta_val = (df_enriched['beta'] * df_enriched['weight']).sum() if not df_enriched.empty else 0.0
 c4.metric("Riesgo Beta Portafolio", f"{beta_val:.2f}", delta="Mercado = 1.0", delta_color="off")
 
+# ─── ALERTAS DE RIESGO ───
+if violations:
+    with st.container():
+        st.error("🚨 **VIOLACIONES DE RIESGO DETECTADAS**")
+        for v in violations:
+            st.error(f"• **{v['ticker']}**: {v['weight']*100:.1f}% > límite {v['limit']*100:.0f}% (exceso: {v['excess']*100:.1f}%)")
+        st.info("💡 Las señales de compra para estos activos han sido anuladas por violación de mandatos.")
+
 st.markdown("---")
 
+# --- TABS ---
 tab_dash, tab_watch, tab_scan, tab_reb, tab_esc, tab_tx = st.tabs([
     "📊 Resumen Visual", "🎯 Radar Watchlist", "📡 Auto-Scanner", "⚖️ Rebalanceador", "🌪️ Riesgo Histórico", "⚙️ Bitácora"
 ])
@@ -233,20 +283,22 @@ with tab_dash:
             st.plotly_chart(fig, use_container_width=True)
             
             # Alertas visuales de reglas
-            if total_cash / portfolio_net_worth < dynamic_min_cash:
-                st.error(f"⚠️ Alerta: Efectivo por debajo del {dynamic_min_cash*100:.1f}% mínimo sugerido por el régimen actual.")
+            if total_cash / portfolio_net_worth < MIN_CASH_TARGET:
+                st.error("⚠️ Alerta: Efectivo por debajo del 10% mínimo requerido.")
             if total_etfs / portfolio_net_worth > MAX_ETF_WEIGHT:
-                st.warning(f"⚠️ Alerta: Exposición a ETFs superior al límite del {MAX_ETF_WEIGHT*100:.1f}%.")
+                st.warning("⚠️ Alerta: Exposición a ETFs superior al límite del 60%.")
         else:
             st.info("Portafolio vacío.")
             
     with col_chart2:
         st.subheader("Inventario Consolidado")
         if not df_enriched.empty:
-            disp_cols = ['ticker', 'quality', 'current_price', 'market_value', 'weight', 'unrealized_pl_pct', 'ConvictionScore', 'TrendScore', 'ValueScore', 'Signal']
+            # ─── FIX: Mostrar debug info en hover o columna extra ───
+            disp_cols = ['ticker', 'current_price', 'market_value', 'weight', 'unrealized_pl_pct', 
+                        'margin_of_safety', 'ConvictionScore', 'Signal']
             
             def color_signal(val):
-                color = 'green' if 'COMPRA' in str(val) else 'red' if 'NO COMPRAR' in str(val) else 'gray'
+                color = 'green' if 'BUY' in str(val) or 'COMPRA FUERTE' in str(val) else 'red' if 'REDUCE' in str(val) or 'AVOID' in str(val) or 'NO COMPRAR' in str(val) else 'gray'
                 return f'color: {color}; font-weight: bold;'
 
             st.dataframe(
@@ -259,8 +311,8 @@ with tab_dash:
                     "market_value": st.column_config.NumberColumn("Valor Mercado", format="$%.2f"),
                     "weight": st.column_config.ProgressColumn("Peso %", format="%.2f", min_value=0, max_value=MAX_STOCK_WEIGHT*1.5),
                     "unrealized_pl_pct": st.column_config.NumberColumn("Retorno %", format="%.2f%%"),
-                    "prob_success": st.column_config.NumberColumn("Prob. Éxito", format="%.2f"),
-                    "quality": "Calidad (yf)",
+                    "margin_of_safety": st.column_config.NumberColumn("MOS", format="%.1f%%"),
+                    "ConvictionScore": st.column_config.NumberColumn("Score"),
                     "Signal": "Señal"
                 },
                 height=350

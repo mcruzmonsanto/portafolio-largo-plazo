@@ -166,13 +166,15 @@ if not df_pos.empty:
         df_quant = fetch_quant_data(tickers)
         
         if not df_quant.empty:
-            # ─── FIX: Merge con sufijos explícitos para evitar columnas duplicadas ───
-            df_enriched = pd.merge(df_pos, df_quant, on='ticker', how='left', suffixes=('_pos', '_quant'))
-            
+            # ─── FIX: Merge limpio — df_pos NO tiene 'current_price', por lo que
+            # el sufijo '_quant' nunca se aplica y la columna resulta 'current_price'
+            df_enriched = pd.merge(df_pos, df_quant, on='ticker', how='left')
+
             # ─── SINGLE SOURCE OF TRUTH para precio ───
-            df_enriched['price_for_calc'] = df_enriched['current_price_quant'].replace(0, pd.NA)
-            df_enriched['price_for_calc'] = df_enriched['price_for_calc'].fillna(df_enriched['average_cost'])
-            df_enriched['current_price'] = df_enriched['price_for_calc']
+            # Usar 'current_price' directamente (proveniente de df_quant vía merge)
+            price_col = 'current_price_quant' if 'current_price_quant' in df_enriched.columns else 'current_price'
+            df_enriched['current_price'] = df_enriched[price_col].replace(0, pd.NA).fillna(df_enriched['average_cost'])
+
             
             df_enriched['market_value'] = df_enriched['quantity'] * df_enriched['current_price']
             df_enriched['cost_basis'] = df_enriched['quantity'] * df_enriched['average_cost']

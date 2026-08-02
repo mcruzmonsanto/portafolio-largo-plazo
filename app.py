@@ -365,8 +365,14 @@ with tab_watch:
                         return ''
                         
                     df_wq['kelly_fraction_pct'] = df_wq['kelly_fraction'] * 100
-                    
-                    styled_df = df_wq[['ticker', 'quality', 'current_price', 'target_price', 'upside_pct', 'time_to_target_months', 'market_cap_billions', 'beta', 'Signal', 'prob_success', 'kelly_fraction_pct', 'Action_Plan', 'notes']].style.map(color_watchlist_signal, subset=['Signal', 'Action_Plan'])
+                    if 'var_95_pct' in df_wq.columns:
+                        df_wq['var_95_disp'] = df_wq['var_95_pct'] * 100
+                        df_wq['cvar_95_disp'] = df_wq['cvar_95_pct'] * 100
+                    else:
+                        df_wq['var_95_disp'] = 0.0
+                        df_wq['cvar_95_disp'] = 0.0
+                        
+                    styled_df = df_wq[['ticker', 'quality', 'current_price', 'var_95_disp', 'cvar_95_disp', 'target_price', 'upside_pct', 'time_to_target_months', 'market_cap_billions', 'beta', 'Signal', 'prob_success', 'kelly_fraction_pct', 'Action_Plan', 'notes']].style.map(color_watchlist_signal, subset=['Signal', 'Action_Plan'])
                     
                     st.dataframe(
                         styled_df,
@@ -378,6 +384,8 @@ with tab_watch:
                             "time_to_target_months": st.column_config.NumberColumn("Tiempo Est. (Meses)", format="%.1f M"),
                             "market_cap_billions": st.column_config.NumberColumn("Market Cap (Billones)", format="$%.2f B"),
                             "beta": st.column_config.NumberColumn("Beta", format="%.2f"),
+                            "var_95_disp": st.column_config.NumberColumn("VaR 95% (MC)", format="%.2f%%"),
+                            "cvar_95_disp": st.column_config.NumberColumn("CVaR (MC)", format="%.2f%%"),
                             "quality": "Calidad",
                             "prob_success": st.column_config.NumberColumn("Prob. Éxito", format="%.2f"),
                             "kelly_fraction_pct": st.column_config.NumberColumn("Kelly Target", format="%.2f%%"),

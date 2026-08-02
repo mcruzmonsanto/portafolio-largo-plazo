@@ -5,6 +5,7 @@ import concurrent.futures
 from modules.data_ingestion import DataProvider
 from modules.scoring_engine import CompositeScorer
 from modules.data_quality import DataQualityMonitor
+from modules.montecarlo import MonteCarloEngine
 import warnings
 
 def fetch_quant_data(tickers):
@@ -18,8 +19,8 @@ def fetch_quant_data(tickers):
         
     tickers_with_spy = list(set(tickers + ['SPY']))
     try:
-        # Descargamos 1 año de datos diarios
-        data = yf.download(tickers_with_spy, period="1y", interval="1d", group_by='ticker', auto_adjust=True, progress=False)
+        # Descargamos 2 años de datos diarios para Monte Carlo
+        data = yf.download(tickers_with_spy, period="2y", interval="1d", group_by='ticker', auto_adjust=True, progress=False)
     except Exception as e:
         print(f"Error descargando datos: {e}")
         return pd.DataFrame()
@@ -39,6 +40,7 @@ def fetch_quant_data(tickers):
     # Descarga rápida de fundamentales (Market Cap, Target Price)
     fundamentals = {}
     quality_monitor = DataQualityMonitor()
+    mc_engine = MonteCarloEngine(simulations=5000, time_horizon_days=30)
     now = pd.Timestamp.now()
     
     def get_info(t):
@@ -107,6 +109,11 @@ def fetch_quant_data(tickers):
             atr = float(true_range.rolling(14).mean().iloc[-1])
             
             
+            # Monte Carlo VaR y CVaR
+            mc_metrics = mc_engine.simulate(ticker=ticker, current_price=current_price, hist_prices=df_t['Close'])
+            var_pct = mc_metrics.var_95_pct
+            cvar_pct = mc_metrics.cvar_95_pct
+            
             fund = fundamentals.get(ticker, {})
             results.append({
                 'ticker': ticker,
@@ -124,7 +131,9 @@ def fetch_quant_data(tickers):
                 'roe': fund.get('roe'),
                 'op_margin': fund.get('op_margin'),
                 'debt_equity': fund.get('debt_equity'),
-                'quality': fund.get('quality_badge', '⚫ yfinance')
+                'quality': fund.get('quality_badge', '⚫ yfinance'),
+                'var_95_pct': var_pct,
+                'cvar_95_pct': cvar_pct
             })
         except Exception as e:
             print(f"Error procesando {ticker}: {e}")

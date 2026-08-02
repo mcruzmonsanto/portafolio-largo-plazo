@@ -4,6 +4,16 @@ from fpdf import FPDF
 import pandas as pd
 from portfolio_config import MAX_STOCK_WEIGHT, MAX_ETF_WEIGHT, KNOWN_ETFS
 
+def format_currency(value):
+    if pd.isna(value): return "-"
+    if abs(value) >= 1000:
+        return f"${value:,.0f}"
+    return f"${value:,.2f}"
+
+def format_percentage(value, decimals=1):
+    if pd.isna(value): return "-"
+    return f"{value*100:.{decimals}f}%"
+
 class PDFTearSheet(FPDF):
     def header(self):
         # Logo / Título
@@ -139,15 +149,15 @@ def generate_tear_sheet(df_enriched: pd.DataFrame, portfolio_net_worth: float, t
         pdf.set_font('helvetica', '', 9)
         for _, row in df_sort.iterrows():
             ticker = str(row['ticker'])
-            val = f"${row['market_value']:,.0f}"
-            w_pct = f"{row['weight']*100:.1f}%"
-            ret_pct = f"{row['unrealized_pl_pct']:.2f}%"
+            val = format_currency(row['market_value'])
+            w_pct = format_percentage(row['weight'])
+            ret_pct = format_percentage(row['unrealized_pl_pct'] / 100.0, decimals=2)
             
-            fv_val = row.get('fair_value_graham')
-            fair_val_str = f"${fv_val:,.1f}" if pd.notnull(fv_val) else "-"
+            fv_val = row.get('fair_value_final')
+            fair_val_str = format_currency(fv_val)
             
             mos = row.get('margin_of_safety')
-            mos_str = f"{mos*100:.1f}%" if pd.notnull(mos) else "-"
+            mos_str = format_percentage(mos)
             
             signal = str(row.get('Signal', '-'))
             

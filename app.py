@@ -34,15 +34,32 @@ logger = logging.getLogger("PortafolioApp")
 # --- REGLAS DURAS DEL PORTAFOLIO (INSTITUCIONALES) ---
 DEFAULT_QUALITY_SCORE = 85
 
-# Cálculo REAL del Margin of Safety global para evitar NameError
-def calc_mos(row):
+from modules.valuation import calculate_fair_value, calculate_fair_value_etf
+
+def format_currency(value):
+    if pd.isna(value): return "-"
+    if abs(value) >= 1000:
+        return f"${value:,.0f}"
+    return f"${value:,.2f}"
+
+def format_percentage(value, decimals=1):
+    if pd.isna(value): return "-"
+    return f"{value*100:.{decimals}f}%"
+
+def calc_valuation(row):
+    ticker = row.get('ticker', '')
     eps = row.get('eps') or 0
     growth = row.get('growth') or 0.05
     price = row.get('current_price') or 0
-    if eps and eps > 0 and price > 0:
+    
+    if ticker in KNOWN_ETFS:
+        val = calculate_fair_value_etf(ticker, price)
+    elif eps and eps > 0 and price > 0:
         val = calculate_fair_value(eps, 15, growth * 100, price)
-        return val['margin_of_safety']
-    return -1.0
+    else:
+        val = {"fv_graham": price, "fv_final": price, "margin_of_safety": 0.0}
+        
+    return pd.Series([val.get('fv_graham', 0), val.get('fv_final', 0), val.get('margin_of_safety', 0)])
 
 @st.cache_data(ttl=3600)
 def get_market_regime():
@@ -149,7 +166,7 @@ if not df_pos.empty:
             # Clasificación de Activos
             df_enriched['asset_type'] = df_enriched['ticker'].apply(lambda x: 'ETF' if x in KNOWN_ETFS else 'Stock')
             
-            df_enriched['margin_of_safety'] = df_enriched.apply(calc_mos, axis=1)
+            df_enriched[['fair_value_graham', 'fair_value_final', 'margin_of_safety']] = df_enriched.apply(calc_valuation, axis=1)
             
             # Scores con gestión de riesgo macro
             signal_engine = BayesianSignal(payoff_ratio=3.0, risk_multiplier=risk_multiplier)

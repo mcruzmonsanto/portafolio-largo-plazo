@@ -1,3 +1,4 @@
+import yfinance as yf
 from portfolio_config import GRAHAM_WEIGHT, MULTIPLE_WEIGHT
 
 def calculate_fair_value(eps: float, target_pe: float, growth_rate: float, current_price: float, bond_yield: float = 4.4) -> dict:
@@ -34,8 +35,13 @@ def calculate_fair_value(eps: float, target_pe: float, growth_rate: float, curre
         }
 
     # 4. Cálculo del Margen de Seguridad
-    if current_price > 0:
-        margin_of_safety = (fv_final - current_price) / fv_final
+    if current_price > 0 and fv_final > 0:
+        if current_price > fv_final:
+            # Sobrevalorado: MOS negativo (usamos current_price como base para no inflar % absurdos)
+            margin_of_safety = (fv_final - current_price) / current_price
+        else:
+            # Subvalorado: MOS positivo
+            margin_of_safety = (fv_final - current_price) / fv_final
     else:
         margin_of_safety = 0.0
 
@@ -46,3 +52,40 @@ def calculate_fair_value(eps: float, target_pe: float, growth_rate: float, curre
         "margin_of_safety": margin_of_safety,
         "is_buy": margin_of_safety >= 0.30  # Usamos el 30% estricto de margen
     }
+
+def calculate_fair_value_etf(ticker: str, current_price: float) -> dict:
+    """
+    Para ETFs, el 'fair value' es el NAV (Net Asset Value).
+    No se valora por EPS, sino por el valor intrínseco de los holdings.
+    """
+    try:
+        etf = yf.Ticker(ticker)
+        info = etf.info
+        
+        nav = info.get('navPrice', current_price)
+        premium = (current_price - nav) / nav if nav > 0 else 0
+        
+        # Para ETFs de índice amplio, el fair value ≈ NAV
+        # El MOS es el descuento/premium: negativo = sobrevalorado
+        mos = -premium  # Si premium es 2%, MOS = -2%
+        
+        return {
+            "fv_graham": nav,
+            "fv_multiple": nav,
+            "fv_final": nav,
+            "margin_of_safety": mos,
+            "is_buy": mos >= 0.05,  # Comprar solo si hay descuento al NAV > 5%
+            "nav": nav,
+            "premium_discount": premium
+        }
+    except Exception:
+        # Fallback: asumir fair value = precio actual (MOS = 0)
+        return {
+            "fv_graham": current_price,
+            "fv_multiple": current_price,
+            "fv_final": current_price,
+            "margin_of_safety": 0.0,
+            "is_buy": False,
+            "nav": current_price,
+            "premium_discount": 0.0
+        }

@@ -129,12 +129,10 @@ df_snap = load_snapshots()
 df_watch = load_watchlist()
 
 # --- CÁLCULO DE LIQUIDEZ Y VALORACIÓN BÁSICA ---
-try:
-    with Session(engine) as session:
-        lm = LedgerManager(session)
-        total_cash = lm.get_cash_balance()
-except Exception:
-    total_cash = 0.0
+cash_injected = df_cash['amount'].sum() if not df_cash.empty else 0.0
+cash_spent = (df_tx[df_tx['action'] == 'BUY']['quantity'] * df_tx[df_tx['action'] == 'BUY']['price']).sum() if not df_tx.empty else 0.0
+cash_gained = (df_tx[df_tx['action'] == 'SELL']['quantity'] * df_tx[df_tx['action'] == 'SELL']['price']).sum() if not df_tx.empty else 0.0
+total_cash = cash_injected - cash_spent + cash_gained
     
 total_cost_basis = (df_pos['quantity'] * df_pos['average_cost']).sum() if not df_pos.empty else 0.0
 
@@ -326,7 +324,7 @@ with tab_watch:
                 import math
                 df_wq = fetch_quant_data(w_tickers)
                 if not df_wq.empty:
-                    df_wq['margin_of_safety'] = df_wq.apply(calc_mos, axis=1)
+                    df_wq[['fair_value_graham', 'fair_value_final', 'margin_of_safety']] = df_wq.apply(calc_valuation, axis=1)
                     
                     signal_engine = BayesianSignal(payoff_ratio=3.0, risk_multiplier=risk_multiplier)
                     w_scores = df_wq.apply(lambda r: signal_engine.generate_signal(r.get('composite_z', 0), r.get('margin_of_safety', 0)), axis=1)

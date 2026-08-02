@@ -16,7 +16,10 @@ from modules.scanner import AutoScanner, UNIVERSES
 from modules.risk_manager import RiskManager
 from modules.reporting import generate_tear_sheet
 from modules.audit import LedgerAuditor
-from portfolio_config import MAX_STOCK_WEIGHT, MAX_ETF_WEIGHT
+from portfolio_config import MAX_STOCK_WEIGHT, MAX_ETF_WEIGHT, KNOWN_ETFS
+
+class RiskViolationError(Exception):
+    pass
 
 st.set_page_config(page_title="Terminal Cuantitativo LP", page_icon="📈", layout="wide", initial_sidebar_state="collapsed")
 
@@ -110,10 +113,13 @@ df_snap = load_snapshots()
 df_watch = load_watchlist()
 
 # --- CÁLCULO DE LIQUIDEZ Y VALORACIÓN BÁSICA ---
-cash_injected = df_cash['amount'].sum() if not df_cash.empty else 0.0
-cash_spent = (df_tx[df_tx['action'] == 'BUY']['quantity'] * df_tx[df_tx['action'] == 'BUY']['price']).sum() if not df_tx.empty else 0.0
-cash_gained = (df_tx[df_tx['action'] == 'SELL']['quantity'] * df_tx[df_tx['action'] == 'SELL']['price']).sum() if not df_tx.empty else 0.0
-total_cash = cash_injected - cash_spent + cash_gained
+try:
+    with Session(engine) as session:
+        lm = LedgerManager(session)
+        total_cash = lm.get_cash_balance()
+except Exception:
+    total_cash = 0.0
+    
 total_cost_basis = (df_pos['quantity'] * df_pos['average_cost']).sum() if not df_pos.empty else 0.0
 
 total_market_value = 0.0
@@ -565,6 +571,35 @@ with tab_tx:
                 if instrumento == "Acción":
                     pos = session.query(Position).filter_by(ticker=op_ticker).first()
                     if op_action == "BUY":
+                        # --- VALIDACIÓN DE RIESGO ---
+                        try:
+                            proposed_mv = op_qty * op_price
+                            current_weight = 0.0
+                            if not df_enriched.empty and op_ticker in df_enriched['ticker'].values:
+                                current_weight = float(df_enriched.loc[df_enriched['ticker'] == op_ticker, 'weight'].iloc[0])
+                            
+                            proposed_weight = proposed_mv / (portfolio_net_worth + proposed_mv) if portfolio_net_worth > 0 else 1.0
+                            new_total_weight = current_weight + proposed_weight
+                            
+                            is_etf = op_ticker in KNOWN_ETFS
+                            max_allowed = MAX_ETF_WEIGHT if is_etf else MAX_STOCK_WEIGHT
+                            
+                            if new_total_weight > max_allowed:
+                                max_shares = int(max(0, (max_allowed - current_weight) * portfolio_net_worth / op_price))
+                                raise RiskViolationError(
+                                    f"Límite de {max_allowed*100}% excedido. "
+                                    f"Máximo adicional: {max_shares} acciones (~${max_shares*op_price:,.0f})"
+                                )
+                                
+                            post_cash = total_cash - proposed_mv
+                            if post_cash < portfolio_net_worth * dynamic_min_cash:
+                                raise RiskViolationError(f"Operación dejaría cash ({post_cash:,.2f}) por debajo del mínimo ({dynamic_min_cash*100:.1f}%)")
+                                
+                        except RiskViolationError as e:
+                            st.session_state["op_err"] = f"🚫 BLOQUEO DE RIESGO: {str(e)}"
+                            st.rerun()
+                            
+                        # Si pasa la validación, procedemos:
                         lm.record_buy(op_date, op_ticker, op_qty, op_price, memo=op_reason)
                         if pos:
                             total_cost_prev = pos.quantity * pos.average_cost

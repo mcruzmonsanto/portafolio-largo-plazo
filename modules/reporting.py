@@ -2,6 +2,7 @@ import io
 from datetime import datetime
 from fpdf import FPDF
 import pandas as pd
+from portfolio_config import MAX_STOCK_WEIGHT, MAX_ETF_WEIGHT, KNOWN_ETFS
 
 class PDFTearSheet(FPDF):
     def header(self):
@@ -56,7 +57,7 @@ def generate_tear_sheet(df_enriched: pd.DataFrame, portfolio_net_worth: float, t
         pdf.set_text_color(192, 57, 43) # Rojo
     else:
         pdf.set_text_color(243, 156, 18) # Amarillo
-    pdf.cell(40, 8, regime, border=0, ln=True)
+    pdf.cell(90, 8, regime, border=0, ln=True)
     
     pdf.set_text_color(0, 0, 0)
     pdf.set_font('helvetica', '', 11)
@@ -87,14 +88,26 @@ def generate_tear_sheet(df_enriched: pd.DataFrame, portfolio_net_worth: float, t
     pdf.cell(40, 8, f'{req_cash_pct:.1f}%', border=0, ln=True)
     
     pdf.set_font('helvetica', '', 11)
-    pdf.cell(100, 8, f'Estado de Solvencia:', border=0)
-    pdf.set_font('helvetica', 'B', 11)
-    if cash_pct >= req_cash_pct:
+    # Validar todas las reglas de riesgo
+    violations = []
+    if cash_pct < req_cash_pct:
+        violations.append("Efectivo Mínimo")
+        
+    if not df_enriched.empty:
+        total_etf_weight = df_enriched[df_enriched['ticker'].isin(KNOWN_ETFS)]['weight'].sum()
+        if total_etf_weight > MAX_ETF_WEIGHT:
+            violations.append("Máx Total ETFs")
+            
+        for _, row in df_enriched.iterrows():
+            if row['ticker'] not in KNOWN_ETFS and row['weight'] > MAX_STOCK_WEIGHT:
+                violations.append(f"Máx por Acción ({row['ticker']})")
+
+    if not violations:
         pdf.set_text_color(39, 174, 96)
-        pdf.cell(40, 8, 'CUMPLE', border=0, ln=True)
+        pdf.cell(80, 8, 'CUMPLE', border=0, ln=True)
     else:
         pdf.set_text_color(192, 57, 43)
-        pdf.cell(40, 8, 'EN INFRACCIÓN', border=0, ln=True)
+        pdf.cell(80, 8, f'VIOLACIONES DETECTADAS: {", ".join(violations)}', border=0, ln=True)
         
     pdf.set_text_color(0, 0, 0)
     pdf.ln(10)
@@ -111,37 +124,56 @@ def generate_tear_sheet(df_enriched: pd.DataFrame, portfolio_net_worth: float, t
         df_sort = df_enriched.sort_values(by='weight', ascending=False)
         
         # Table Header
-        pdf.set_font('helvetica', 'B', 10)
+        pdf.set_font('helvetica', 'B', 9)
         pdf.set_fill_color(240, 240, 240)
-        pdf.cell(25, 8, 'Ticker', border=1, fill=True)
-        pdf.cell(35, 8, 'Mercado ($)', border=1, fill=True, align='R')
-        pdf.cell(30, 8, 'Peso (%)', border=1, fill=True, align='R')
-        pdf.cell(35, 8, 'Retorno (%)', border=1, fill=True, align='R')
-        pdf.cell(65, 8, 'Señal Actual', border=1, fill=True, align='C')
+        pdf.cell(20, 8, 'Ticker', border=1, fill=True)
+        pdf.cell(25, 8, 'Mercado ($)', border=1, fill=True, align='R')
+        pdf.cell(20, 8, 'Peso (%)', border=1, fill=True, align='R')
+        pdf.cell(25, 8, 'Retorno (%)', border=1, fill=True, align='R')
+        pdf.cell(25, 8, 'Fair Value', border=1, fill=True, align='R')
+        pdf.cell(25, 8, 'MOS (%)', border=1, fill=True, align='R')
+        pdf.cell(50, 8, 'Señal Actual', border=1, fill=True, align='C')
         pdf.ln()
         
         # Table Body
-        pdf.set_font('helvetica', '', 10)
+        pdf.set_font('helvetica', '', 9)
         for _, row in df_sort.iterrows():
             ticker = str(row['ticker'])
-            val = f"${row['market_value']:,.2f}"
+            val = f"${row['market_value']:,.0f}"
             w_pct = f"{row['weight']*100:.1f}%"
             ret_pct = f"{row['unrealized_pl_pct']:.2f}%"
+            
+            fv_val = row.get('fair_value_graham')
+            fair_val_str = f"${fv_val:,.1f}" if pd.notnull(fv_val) else "-"
+            
+            mos = row.get('margin_of_safety')
+            mos_str = f"{mos*100:.1f}%" if pd.notnull(mos) else "-"
+            
             signal = str(row.get('Signal', '-'))
             
-            pdf.cell(25, 8, ticker, border=1)
-            pdf.cell(35, 8, val, border=1, align='R')
-            pdf.cell(30, 8, w_pct, border=1, align='R')
+            pdf.cell(20, 8, ticker, border=1)
+            pdf.cell(25, 8, val, border=1, align='R')
+            pdf.cell(20, 8, w_pct, border=1, align='R')
             
             # Color for return
             if row['unrealized_pl_pct'] >= 0:
                 pdf.set_text_color(39, 174, 96)
             else:
                 pdf.set_text_color(192, 57, 43)
-            pdf.cell(35, 8, ret_pct, border=1, align='R')
+            pdf.cell(25, 8, ret_pct, border=1, align='R')
             
             pdf.set_text_color(0, 0, 0)
-            pdf.cell(65, 8, signal[:30], border=1, align='C')
+            pdf.cell(25, 8, fair_val_str, border=1, align='R')
+            
+            # Color for MOS
+            if pd.notnull(mos) and mos > 0.2:
+                pdf.set_text_color(39, 174, 96)
+            elif pd.notnull(mos) and mos < 0:
+                pdf.set_text_color(192, 57, 43)
+            pdf.cell(25, 8, mos_str, border=1, align='R')
+            
+            pdf.set_text_color(0, 0, 0)
+            pdf.cell(50, 8, signal[:25], border=1, align='C')
             pdf.ln()
     else:
         pdf.set_font('helvetica', 'I', 11)

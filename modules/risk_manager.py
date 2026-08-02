@@ -54,8 +54,15 @@ class RiskManager:
                 risk_multiplier = 0.4
                 cash_target = 0.30
                 
+            confidence = ml_pred.get('confidence', 0)
+            confidence_pct = confidence * 100
+            if confidence < 0.65:
+                regime_str = f"{regime} (⚠️ Baja Confianza: {confidence_pct:.0f}%)"
+            else:
+                regime_str = f"{regime} (✅ Confianza: {confidence_pct:.0f}%)"
+                
             return {
-                "regime": f"{regime} (ML Confidence: {ml_pred.get('confidence', 0)*100:.0f}%)",
+                "regime": regime_str,
                 "risk_multiplier": risk_multiplier,
                 "cash_target": cash_target,
                 "spy_price": current_spy,

@@ -33,7 +33,6 @@ logger = logging.getLogger("PortafolioApp")
 
 # --- REGLAS DURAS DEL PORTAFOLIO (INSTITUCIONALES) ---
 DEFAULT_QUALITY_SCORE = 85
-KNOWN_ETFS = ['SPY', 'VOO', 'QQQ', 'QQQM', 'SMH', 'SPMO', 'DIA', 'IWM', 'VTI', 'VT']
 
 # Cálculo REAL del Margin of Safety global para evitar NameError
 def calc_mos(row):
